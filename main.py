@@ -1,3 +1,5 @@
+import time
+
 from app.db.schema import init_db
 
 from app.models.product import Dimensions
@@ -7,7 +9,7 @@ from app.repositories.user_repository import UserRepository
 from app.repositories.admin_repository import AdminRepository
 from app.repositories.customer_repository import CustomerRepository
 from app.repositories.item_repository import ItemRepository
-from app.repositories.favorites_repository import FavoritesRepository
+from app.repositories.history_repository import HistoryRepository
 
 from app.services.auth_service import (
     AuthService,
@@ -16,7 +18,7 @@ from app.services.auth_service import (
     InvalidCredentialsError,
 )
 from app.services.role_service import RoleService
-from app.services.favorites_service import FavoritesService
+from app.services.history_service import HistoryService
 
 
 def main():
@@ -73,23 +75,22 @@ def main():
     )
     print("Created items:", item1_id, item2_id)
 
-    # ---------- FAVORITES ----------
-    fav_service = FavoritesService(FavoritesRepository(), item_repo)
+    # ---------- HISTORY ----------
+    history_service = HistoryService(HistoryRepository(), item_repo)
 
-    fav_service.add_favorite(logged.id, item1_id)
-    fav_service.add_favorite(logged.id, item2_id)
-    fav_service.add_favorite(logged.id, item2_id)  # duplicate is ignored by DB
+    history_service.record_view(logged.id, item1_id)
+    time.sleep(0.2)
+    history_service.record_view(logged.id, item2_id)
+    time.sleep(0.2)
+    history_service.record_view(logged.id, item2_id)
 
-    print("\nFavorites list:")
-    for row in fav_service.list_favorites(logged.id):
+    print("\nHistory list (newest first):")
+    for row in history_service.list_history(logged.id):
         print(" -", row)
 
-    print("\nIs lamp favorite?", fav_service.is_favorite(logged.id, item2_id))
-
-    fav_service.remove_favorite(logged.id, item2_id)
-    print("\nAfter removing lamp:")
-    for row in fav_service.list_favorites(logged.id):
-        print(" -", row)
+    # Uncomment to test clearing:
+    # history_service.clear_history(logged.id)
+    # print("\nHistory after clear:", history_service.list_history(logged.id))
 
 
 if __name__ == "__main__":
