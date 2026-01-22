@@ -6,9 +6,9 @@ from app.models.item import Item
 from app.repositories.user_repository import UserRepository
 from app.repositories.admin_repository import AdminRepository
 from app.repositories.customer_repository import CustomerRepository
-from app.repositories.category_repository import CategoryRepository
 from app.repositories.item_repository import ItemRepository
-from app.repositories.item_category_repository import ItemCategoryRepository
+from app.repositories.cart_repository import CartRepository
+from app.repositories.item_cart_repository import ItemCartRepository
 
 from app.services.auth_service import (
     AuthService,
@@ -43,57 +43,63 @@ def main():
         print("Login failed:", e)
         return
 
-    # --------- ROLES: make ADMIN (required for Item FK) ---------
+    # --------- ROLES ---------
     role_service = RoleService(AdminRepository(), CustomerRepository())
-    role_service.make_admin(logged.id)
+
+    # We need CUSTOMER for Cart FK
+    role_service.make_customer(logged.id, currency="BGN")
     logged = role_service.enrich_user_role(logged)
     print("User role:", logged.role)
 
-    # --------- CREATE CATEGORIES ---------
-    cat_repo = CategoryRepository()
+    # --------- CREATE CART (for customer) ---------
+    cart_repo = CartRepository()
+    cart = cart_repo.get_or_create_for_customer(logged.id)
+    print("Cart:", cart)
 
-    def ensure_category(name: str) -> int:
-        existing = cat_repo.get_by_name(name)
-        if existing:
-            return existing.id
-        return cat_repo.create(name)
+    # --------- CREATE ITEMS (needs ADMIN for Item FK) ---------
+    # Make the same user admin just for testing item creation
+    role_service.make_admin(logged.id)
 
-    furniture_id = ensure_category("Furniture")
-    office_id = ensure_category("Office")
-
-    print("Category ids:", {"Furniture": furniture_id, "Office": office_id})
-
-    # --------- CREATE ITEM ---------
     item_repo = ItemRepository()
-
-    dims = Dimensions(length=120.0, width=60.0, height=75.0)
-    item = Item(
-        id=None,
-        admin_user_id=logged.id,
-        name="Office Desk",
-        description="Wooden office desk with drawers",
-        dimensions=dims,
-        weight=25.5,
-        price=299.99,
+    item1_id = item_repo.create(
+        Item(
+            id=None,
+            admin_user_id=logged.id,
+            name="Office Desk",
+            description="Wooden office desk",
+            dimensions=Dimensions(length=120, width=60, height=75),
+            weight=25.5,
+            price=299.99,
+        )
     )
+    item2_id = item_repo.create(
+        Item(
+            id=None,
+            admin_user_id=logged.id,
+            name="Desk Lamp",
+            description="LED desk lamp",
+            dimensions=Dimensions(length=20, width=12, height=35),
+            weight=1.2,
+            price=39.90,
+        )
+    )
+    print("Created items:", item1_id, item2_id)
 
-    item_id = item_repo.create(item)
-    print("Created item id:", item_id)
+    # --------- ADD ITEMS TO CART ---------
+    ic_repo = ItemCartRepository()
 
-    # --------- LINK ITEM <-> CATEGORY ---------
-    ic_repo = ItemCategoryRepository()
-    ic_repo.add(item_id, furniture_id)
-    ic_repo.add(item_id, office_id)
+    ic_repo.upsert_quantity(cart.id, item1_id, 2)
+    ic_repo.upsert_quantity(cart.id, item2_id, 1)
 
-    cats_for_item = ic_repo.list_categories_for_item(item_id)
-    print(f"Categories for item {item_id}:")
-    for c in cats_for_item:
-        print(" -", c)
+    # increment lamp by +2 (=> 3)
+    ic_repo.increment(cart.id, item2_id, delta=2)
 
-    items_for_furniture = ic_repo.list_items_for_category(furniture_id)
-    print(f"Items in category 'Furniture' (id={furniture_id}):")
-    for it in items_for_furniture:
-        print(" -", it)
+    # decrement desk by 1 (=> 1)
+    ic_repo.decrement(cart.id, item1_id, delta=1)
+
+    print("Cart items:")
+    for ci in ic_repo.list_items(cart.id):
+        print(" -", ci)
 
 
 if __name__ == "__main__":
