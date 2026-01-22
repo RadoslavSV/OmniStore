@@ -5,11 +5,11 @@ from app.db.connection import get_connection
 
 
 class CustomerRepository:
-    def make_customer(self, user_id: int, currency: str = "BGN") -> None:
+    def make_customer(self, user_id: int, currency: str = "EUR") -> None:
         """
         Inserts (or replaces) a row in Customer table for the given user.
         """
-        currency = (currency or "BGN").strip().upper()
+        currency = (currency or "EUR").strip().upper()
 
         conn = get_connection()
         try:

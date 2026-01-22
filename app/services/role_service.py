@@ -28,5 +28,5 @@ class RoleService:
     def make_admin(self, user_id: int) -> None:
         self.admin_repo.make_admin(user_id, role="ADMIN")
 
-    def make_customer(self, user_id: int, currency: str = "BGN") -> None:
+    def make_customer(self, user_id: int, currency: str = "EUR") -> None:
         self.customer_repo.make_customer(user_id, currency=currency)
