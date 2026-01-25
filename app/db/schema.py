@@ -99,6 +99,29 @@ CREATE TABLE IF NOT EXISTS History (
     FOREIGN KEY(ItemID) REFERENCES Item(ID) ON DELETE CASCADE
 );
 
+-- Orders (Checkout)
+CREATE TABLE IF NOT EXISTS "Order" (
+    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    CustomerUserID INTEGER NOT NULL,
+    CreatedAt TEXT NOT NULL,
+    Status TEXT NOT NULL DEFAULT 'CREATED',
+    TotalBase REAL NOT NULL DEFAULT 0,
+    FOREIGN KEY (CustomerUserID) REFERENCES Customer(UserID) ON DELETE RESTRICT,
+    CHECK (Status IN ('CREATED', 'PAID', 'CANCELLED'))
+);
+
+CREATE TABLE IF NOT EXISTS OrderItem (
+    OrderID INTEGER NOT NULL,
+    ItemID INTEGER NULL,
+    ItemName TEXT NOT NULL,
+    UnitPriceBase REAL NOT NULL,
+    Quantity INTEGER NOT NULL,
+    PRIMARY KEY (OrderID, ItemID),
+    FOREIGN KEY (OrderID) REFERENCES "Order"(ID) ON DELETE CASCADE,
+    FOREIGN KEY (ItemID) REFERENCES Item(ID) ON DELETE SET NULL,
+    CHECK (Quantity > 0)
+);
+
 -- Helpful indexes (optional but recommended)
 CREATE INDEX IF NOT EXISTS idx_item_admin ON Item(AdminUserID);
 CREATE INDEX IF NOT EXISTS idx_picture_item ON Picture(ItemID);
@@ -106,6 +129,9 @@ CREATE INDEX IF NOT EXISTS idx_item_category_cat ON Item_Category(CategoryID);
 CREATE INDEX IF NOT EXISTS idx_item_cart_item ON Item_Cart(ItemID);
 CREATE INDEX IF NOT EXISTS idx_fav_item ON Favorites(ItemID);
 CREATE INDEX IF NOT EXISTS idx_hist_item ON History(ItemID);
+CREATE INDEX IF NOT EXISTS idx_order_customer ON "Order"(CustomerUserID);
+CREATE INDEX IF NOT EXISTS idx_order_created ON "Order"(CreatedAt);
+CREATE INDEX IF NOT EXISTS idx_orderitem_order ON OrderItem(OrderID);
 """
 
 
