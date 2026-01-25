@@ -21,11 +21,13 @@ from app.services.auth_service import (
 from app.services.role_service import RoleService
 from app.services.cart_service import CartService
 from app.services.checkout_service import CheckoutService, EmptyCartError
+from app.services.order_history_service import OrderHistoryService, OrderNotFoundError
 
 
 def main():
     init_db()
 
+    # ---------- AUTH ----------
     auth = AuthService(UserRepository())
 
     try:
@@ -46,12 +48,14 @@ def main():
         print("Login failed:", e)
         return
 
+    # ---------- ROLES ----------
     role_service = RoleService(AdminRepository(), CustomerRepository())
     role_service.make_customer(logged.id, currency="EUR")
     role_service.make_admin(logged.id)
 
-    # Create items
+    # ---------- CREATE ITEMS ----------
     item_repo = ItemRepository()
+
     item1_id = item_repo.create(
         Item(
             id=None,
@@ -60,7 +64,7 @@ def main():
             description="Wooden office desk",
             dimensions=Dimensions(length=120, width=60, height=75),
             weight=25.5,
-            price=300.00,  # EUR
+            price=300.00,
         )
     )
     item2_id = item_repo.create(
@@ -71,12 +75,12 @@ def main():
             description="LED desk lamp",
             dimensions=Dimensions(length=20, width=12, height=35),
             weight=1.2,
-            price=40.00,  # EUR
+            price=40.00,
         )
     )
     print("Created items:", item1_id, item2_id)
 
-    # Put items in cart
+    # ---------- CART ----------
     cart_service = CartService(
         CartRepository(),
         ItemCartRepository(),
@@ -84,12 +88,12 @@ def main():
         CustomerRepository(),
         base_currency="EUR",
     )
+
     cart_service.add_item(logged.id, item1_id, quantity=1)
     cart_service.add_item(logged.id, item2_id, quantity=2)
-
     print("\nCart total (EUR base):", cart_service.get_total(logged.id))
 
-    # Checkout
+    # ---------- CHECKOUT (creates order + clears cart) ----------
     checkout = CheckoutService(
         CartRepository(),
         ItemCartRepository(),
@@ -101,24 +105,31 @@ def main():
 
     try:
         order_id = checkout.checkout(logged.id)
-        print("\nCreated order id:", order_id)
+        print("\nCheckout success. Created order id:", order_id)
     except EmptyCartError as e:
         print("Checkout failed:", e)
-        return
 
-    # Print order + items
-    order_repo = OrderRepository()
-    order_item_repo = OrderItemRepository()
+    print("Cart after checkout:", cart_service.get_items(logged.id))
 
-    order = order_repo.get_by_id(order_id)
-    print("Order:", order)
+    # ---------- ORDER HISTORY ----------
+    history = OrderHistoryService(OrderRepository(), OrderItemRepository())
 
-    print("Order items:")
-    for oi in order_item_repo.list_for_order(order_id):
-        print(" -", oi)
+    print("\nOrder history:")
+    orders = history.list_orders(logged.id)
+    for o in orders:
+        print(" -", o)
 
-    # Cart should now be empty
-    print("\nCart after checkout:", cart_service.get_items(logged.id))
+    if orders:
+        first_order_id = orders[0]["order_id"]
+        try:
+            details = history.get_order_details(logged.id, first_order_id)
+            print(f"\nOrder details for order {first_order_id}:")
+            print("Order:", details["order"])
+            print("Items:")
+            for it in details["items"]:
+                print(" -", it)
+        except OrderNotFoundError as e:
+            print("Details error:", e)
 
 
 if __name__ == "__main__":
