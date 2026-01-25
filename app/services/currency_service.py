@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Iterable
+from typing import Dict, Optional, Set
 import os
 import time
 import requests
@@ -18,81 +18,108 @@ class UnsupportedCurrencyError(CurrencyServiceError):
 @dataclass
 class CurrencyService:
     """
-    Currency conversion service using https://exchangerate.host (LIVE endpoint).
-    - Handles modern response format with `quotes`
-    - Handles success:false with error info
-    - Simple in-memory caching
-    - Supports conversion between ANY two currencies via cross-rate
+    Currency conversion service using exchangerate.host /live (apilayer).
+    Goals:
+    - ONE request per TTL (fetch ALL quotes, no per-currency fetch) -> protects quota & avoids rate-limit bursts
+    - In-memory cache with TTL
+    - Cross-rate conversion supported (from -> to) via SOURCE currency (usually USD)
+    - Graceful fallback if missing key or temporary rate-limit (use cached rates if available)
     """
 
-    base_url: str = "https://api.exchangerate.host/live"
-    cache_ttl_seconds: int = 3600  # 1 hour
-    access_key: Optional[str] = None  # set via constructor or env EXCHANGERATE_HOST_KEY
+    live_url: str = "https://api.exchangerate.host/live"
+    cache_ttl_seconds: int = 6 * 3600  # 6 hours by default (better for 100 requests/month)
+    access_key: Optional[str] = None  # or env EXCHANGERATE_HOST_KEY
 
-    _quotes_cache: Dict[str, float] = None   
+    _source_currency: str = "USD"
+    _quotes_cache: Dict[str, float] = None  # e.g. {"USDEUR": 0.92, "USDGBP": 0.79, ...}
     _cache_timestamp: float = 0.0
-    _source_currency: str = "USD"  # live endpoint default source is usually USD :contentReference[oaicite:1]{index=1}
 
     def __post_init__(self):
         if self._quotes_cache is None:
             self._quotes_cache = {}
+        # Hard switch: API disabled by default during development
+        _enable = os.getenv("OMNISTORE_ENABLE_CURRENCY_API", "0") == "1"
 
-        if self.access_key is None:
-            self.access_key = os.getenv("EXCHANGERATE_HOST_KEY")
+        if not _enable:
+            # Force-disable API calls even if a key exists in env
+            self.access_key = None
+        else:
+            if self.access_key is None:
+                self.access_key = os.getenv("EXCHANGERATE_HOST_KEY")
+
 
     # ---------- Internal ----------
 
-    def _fetch_quotes(self, currencies: Optional[Iterable[str]] = None) -> None:
+    def _api_get(self, url: str, params: dict) -> dict:
+        try:
+            resp = requests.get(url, params=params, timeout=8)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as e:
+            # Special-case 429: rate limit. We'll handle gracefully in _ensure_loaded().
+            raise CurrencyServiceError(f"HTTP error: {e}") from e
+        except Exception as e:
+            raise CurrencyServiceError("Failed to fetch exchange rates (network/HTTP error).") from e
+
+    def _fetch_all_quotes_live(self) -> None:
+        """
+        Fetches ALL quotes in one call (no 'currencies' param) to avoid extra calls.
+        """
         params = {}
         if self.access_key:
             params["access_key"] = self.access_key
 
-        # currencies param reduces payload; ok to omit (returns many)
-        if currencies:
-            params["currencies"] = ",".join(sorted({c.upper() for c in currencies}))
+        data = self._api_get(self.live_url, params)
 
-        try:
-            resp = requests.get(self.base_url, params=params, timeout=8)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            raise CurrencyServiceError("Failed to fetch exchange rates (network/HTTP error).") from e
-
-        # If API returns success:false, surface the reason
         if isinstance(data, dict) and data.get("success") is False:
             err = data.get("error") or {}
             msg = err.get("info") or err.get("type") or str(data)
             raise CurrencyServiceError(f"ExchangeRate.host error: {msg}")
 
-        # Parse quotes format
         quotes = data.get("quotes")
         source = data.get("source") or self._source_currency
 
         if not isinstance(quotes, dict) or not quotes:
-            # Some deployments still return `rates`; handle just in case
-            rates = data.get("rates")
-            base = data.get("base") or source
-            if isinstance(rates, dict) and rates:
-                # Convert rates -> quotes-like relative to base
-                # base->XXX
-                self._source_currency = base.upper()
-                self._quotes_cache = {f"{self._source_currency}{k.upper()}": float(v) for k, v in rates.items()}
-                self._cache_timestamp = time.time()
-                return
-
-            raise CurrencyServiceError("Invalid response: neither 'quotes' nor 'rates' found.")
+            raise CurrencyServiceError("Invalid response from /live: missing 'quotes'")
 
         self._source_currency = str(source).upper()
         self._quotes_cache = {str(k).upper(): float(v) for k, v in quotes.items()}
         self._cache_timestamp = time.time()
 
-    def _ensure_loaded(self, needed: Optional[Iterable[str]] = None) -> None:
-        expired = (time.time() - self._cache_timestamp) > self.cache_ttl_seconds
-        if not self._quotes_cache or expired:
-            # Make sure we include the needed currencies for cross-rate conversion
-            self._fetch_quotes(currencies=needed)
+    def _ensure_loaded(self) -> None:
+        """
+        Loads cache if empty/expired.
+        If rate-limited (429), keeps existing cache (if any) and continues.
+        If no cache at all, does graceful fallback (no conversion).
+        """
+        now = time.time()
+        expired = (now - self._cache_timestamp) > self.cache_ttl_seconds
 
-    def _usd_to(self, currency: str) -> float:
+        # No key -> never call external API
+        if not self.access_key:
+            if self._quotes_cache is None:
+                self._quotes_cache = {}
+            self._cache_timestamp = now
+            return
+
+        if self._quotes_cache and not expired:
+            return
+
+        try:
+            self._fetch_all_quotes_live()
+        except CurrencyServiceError:
+            # If we already have some cache, keep it (best-effort)
+            if self._quotes_cache:
+                self._cache_timestamp = now  # prevent tight re-fetch loops
+                return
+            # No cache -> cannot convert; leave empty and let public methods fallback
+            self._quotes_cache = {}
+            self._cache_timestamp = now
+
+    def _rate_source_to(self, currency: str) -> float:
+        """
+        Returns rate: 1 SOURCE = X CURRENCY
+        """
         currency = currency.upper()
         if currency == self._source_currency:
             return 1.0
@@ -105,46 +132,58 @@ class CurrencyService:
 
     # ---------- Public API ----------
 
+    def get_rate(self, to_currency: str, from_currency: str = "EUR") -> float:
+        """
+        Returns: 1 unit of from_currency expressed in to_currency.
+        Cross-rate via SOURCE currency:
+          rate(from->to) = (SOURCE->to) / (SOURCE->from)
+        """
+        from_currency = from_currency.upper()
+        to_currency = to_currency.upper()
+
+        if from_currency == to_currency:
+            return 1.0
+
+        self._ensure_loaded()
+
+        # If cache is empty (no key / rate-limited with no cache), fallback 1:1
+        if not self._quotes_cache:
+            return 1.0
+
+        s_to_from = self._rate_source_to(from_currency)
+        s_to_to = self._rate_source_to(to_currency)
+        return float(s_to_to / s_to_from)
+
     def convert(self, amount: float, to_currency: str, from_currency: str = "EUR") -> float:
-        """
-        Convert amount from one currency to another via cross-rate.
-        Default from_currency = EUR (както ти е удобно за магазина).
-        """
         if amount < 0:
             raise ValueError("Amount cannot be negative")
 
         from_currency = from_currency.upper()
         to_currency = to_currency.upper()
 
-        # ensure we have both currencies in cache (for cross-rate)
-        self._ensure_loaded(needed=[from_currency, to_currency])
-
         if from_currency == to_currency:
             return round(amount, 2)
 
-        # quotes are relative to source_currency (usually USD)
-        # amount_in_source = amount / (source->from)
-        # result = amount_in_source * (source->to)
-        rate_source_to_from = self._usd_to(from_currency)
-        rate_source_to_to = self._usd_to(to_currency)
+        # No key -> no external calls -> graceful fallback
+        if not self.access_key:
+            return round(amount, 2)
 
-        amount_in_source = amount / rate_source_to_from
-        result = amount_in_source * rate_source_to_to
-        return round(result, 2)
-
-    def get_rate(self, to_currency: str, from_currency: str = "EUR") -> float:
-        """
-        Returns 1 unit of from_currency expressed in to_currency.
-        """
-        return self.convert(1.0, to_currency=to_currency, from_currency=from_currency)
+        rate = self.get_rate(to_currency=to_currency, from_currency=from_currency)
+        return round(amount * rate, 2)
 
     def list_supported_currencies(self):
+        """
+        Returns currencies from the current cache.
+        Will trigger one fetch if cache empty/expired (and key exists).
+        """
         self._ensure_loaded()
-        # extract suffix currencies from e.g. "USDXXX"
+
         src = self._source_currency
-        out = set()
+        out: Set[str] = {src}
+
         for k in self._quotes_cache.keys():
+            k = str(k).upper()
             if k.startswith(src) and len(k) == 6:
                 out.add(k[3:])
-        out.add(src)
+
         return sorted(out)
