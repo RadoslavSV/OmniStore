@@ -101,7 +101,7 @@ class MainWindow:
             row += 1
 
         self.sidebar.rowconfigure(row, weight=1)
-        ttk.Label(self.sidebar, text="Stage 2.1: session + role nav", style="Muted.TLabel").grid(row=row + 1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(self.sidebar, text="Stage 2.2", style="Muted.TLabel").grid(row=row + 1, column=0, sticky="w", pady=(10, 0))
 
     # -------- State / UI refresh --------
 
@@ -163,6 +163,13 @@ class MainWindow:
             return
 
         view.tkraise()
+
+        # Auto refresh if the view supports it
+        if hasattr(view, "on_show"):
+            try:
+                view.on_show()
+            except Exception:
+                pass
 
     def set_status(self, text: str):
         # Keep a short UI-friendly status bar message
