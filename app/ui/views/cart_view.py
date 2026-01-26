@@ -5,14 +5,15 @@ from app.ui.views.base_view import BaseView
 
 
 class CartView(BaseView):
-    def __init__(self, parent, *, on_navigate, set_status):
+    def __init__(self, parent, *, on_navigate, set_status, state):
         super().__init__(
             parent,
             on_navigate=on_navigate,
             set_status=set_status,
             title="Cart",
-            subtitle="Stage 1: UI shell. Stage 3 will show real cart + checkout.",
+            subtitle="Stage 2.1: access requires login. Stage 3 will show real cart + checkout.",
         )
+        self.state = state
 
         ttk.Label(self.content, text="Cart is empty (stub).").pack(anchor="nw", pady=6)
 

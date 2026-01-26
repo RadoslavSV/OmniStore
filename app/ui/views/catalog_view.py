@@ -5,14 +5,15 @@ from app.ui.views.base_view import BaseView
 
 
 class CatalogView(BaseView):
-    def __init__(self, parent, *, on_navigate, set_status):
+    def __init__(self, parent, *, on_navigate, set_status, state):
         super().__init__(
             parent,
             on_navigate=on_navigate,
             set_status=set_status,
             title="Catalog",
-            subtitle="Stage 1: placeholder list. Stage 2 will load items from StoreAppService.",
+            subtitle="Stage 2.1: role-aware navigation. Stage 2.2 loads real items.",
         )
+        self.state = state
 
         ttk.Button(self.content, text="Refresh (stub)", command=self._refresh_stub).pack(anchor="nw")
 
@@ -20,7 +21,6 @@ class CatalogView(BaseView):
         self.listbox.heading("price", text="Price (EUR)")
         self.listbox.pack(fill="x", pady=10)
 
-        # Add a couple of dummy rows for layout
         self._set_dummy_rows()
 
         ttk.Button(self.content, text="Go to Cart", command=lambda: self.on_navigate("cart")).pack(anchor="nw")
@@ -32,4 +32,4 @@ class CatalogView(BaseView):
         self.listbox.insert("", "end", values=("Desk Lamp - 40.00",))
 
     def _refresh_stub(self):
-        self.set_status("Catalog refreshed (stub)")
+        self.set_status(f"Catalog refreshed (stub). Currency: {self.state.currency}")
