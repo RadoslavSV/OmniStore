@@ -35,6 +35,12 @@ from app.presentation.app_result import AppResult
 from app.presentation.error_mapper import map_exception
 from app.presentation.app_exceptions import AppError
 
+from app.presentation.dto import (
+    item_list_dto,
+    cart_dto,
+    order_list_dto,
+    order_details_dto,
+)
 
 @dataclass
 class StoreAppService:
@@ -155,9 +161,12 @@ class StoreAppService:
     # ---------- Auth / Roles ----------
 
     def register_customer(self, username: str, email: str, name: str, password: str, currency: str = "EUR") -> User:
-        user = self.auth.register(username=username, email=email, name=name, password=password)
-        self.roles.make_customer(user.id, currency=currency)
-        return self.roles.enrich_user_role(user)
+        try:
+            user = self.auth.register(username=username, email=email, name=name, password=password)
+            self.roles.make_customer(user.id, currency=currency)
+            return self.roles.enrich_user_role(user)
+        except Exception as e:
+            raise AppError(str(e))
 
     def login(self, email: str, password: str) -> User:
         user = self.auth.login(email=email, password=password)
@@ -175,7 +184,7 @@ class StoreAppService:
     # ---------- Catalog ----------
 
     def list_items(self) -> List[Dict]:
-        items = self.item_repo.get_all()
+        items = self.item_repo.list_all() or []
         return [
             {
                 "item_id": it.id,
@@ -287,11 +296,11 @@ class StoreAppService:
     def ui_register_customer(self, username: str, email: str, name: str, password: str, currency: str = "EUR") -> AppResult:
         return self.run(self.register_customer, username, email, name, password, currency)
 
-    def ui_list_items(self) -> AppResult:
-        return self.run(self.list_items)
+    def ui_list_items(self):
+        return self.run(lambda: item_list_dto(self.list_items()))
 
-    def ui_get_cart(self, customer_user_id: int, display_currency: Optional[str] = None) -> AppResult:
-        return self.run(self.get_cart, customer_user_id, display_currency)
+    def ui_get_cart(self, customer_user_id: int, display_currency=None):
+        return self.run(lambda: cart_dto(self.get_cart(customer_user_id, display_currency)))
 
     def ui_add_to_cart(self, customer_user_id: int, item_id: int, quantity: int = 1) -> AppResult:
         return self.run(self.add_to_cart, customer_user_id, item_id, quantity)
@@ -299,8 +308,8 @@ class StoreAppService:
     def ui_checkout(self, customer_user_id: int) -> AppResult:
         return self.run(self.proceed_to_checkout, customer_user_id)
 
-    def ui_list_orders(self, customer_user_id: int, limit: int = 50) -> AppResult:
-        return self.run(self.list_orders, customer_user_id, limit)
+    def ui_list_orders(self, customer_user_id: int, limit=50):
+        return self.run(lambda: order_list_dto(self.list_orders(customer_user_id, limit)))
 
-    def ui_order_details(self, customer_user_id: int, order_id: int) -> AppResult:
-        return self.run(self.get_order_details, customer_user_id, order_id)
+    def ui_order_details(self, customer_user_id: int, order_id: int):
+        return self.run(lambda: order_details_dto(self.get_order_details(customer_user_id, order_id)))

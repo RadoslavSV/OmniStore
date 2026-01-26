@@ -22,7 +22,7 @@ def main():
         username="radoslav2",
         email="radoslav@example.com",
         name="Test",
-        password="123",
+        password="123456",
         currency="EUR",
     )
     print(r)
