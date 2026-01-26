@@ -11,7 +11,7 @@ from app.ui.views.register_view import RegisterView
 from app.ui.views.catalog_view import CatalogView
 from app.ui.views.cart_view import CartView
 from app.ui.views.orders_view import OrdersView
-
+from app.ui.views.item_details_view import ItemDetailsView
 
 class MainWindow:
     def __init__(self, root: tk.Tk):
@@ -76,6 +76,7 @@ class MainWindow:
         self.views["catalog"] = CatalogView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
         self.views["cart"] = CartView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
         self.views["orders"] = OrdersView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
+        self.views["item_details"] = ItemDetailsView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
 
         for v in self.views.values():
             v.grid(row=0, column=0, sticky="nsew")
@@ -101,7 +102,7 @@ class MainWindow:
             row += 1
 
         self.sidebar.rowconfigure(row, weight=1)
-        ttk.Label(self.sidebar, text="Stage 2.2", style="Muted.TLabel").grid(row=row + 1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(self.sidebar, text="Stage 2.3", style="Muted.TLabel").grid(row=row + 1, column=0, sticky="w", pady=(10, 0))
 
     # -------- State / UI refresh --------
 

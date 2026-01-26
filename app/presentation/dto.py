@@ -73,3 +73,23 @@ def order_details_dto(details: Dict) -> Dict:
             for it in details["items"]
         ],
     }
+
+def item_details_dto(details: Dict) -> Dict:
+    it = details["item"]
+    return {
+        "id": it.id,
+        "name": it.name,
+        "description": it.description,
+        "dimensions": {
+            "length": float(it.dimensions.length),
+            "width": float(it.dimensions.width),
+            "height": float(it.dimensions.height),
+        },
+        "weight": float(it.weight),
+        "price": float(it.price),
+        "currency": "EUR",
+        "categories": details.get("categories", []),
+        "pictures": details.get("pictures", []),
+        "main_picture": details.get("main_picture"),
+    }
+

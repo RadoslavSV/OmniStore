@@ -34,6 +34,7 @@ from app.services.history_service import HistoryService
 from app.presentation.app_result import AppResult
 from app.presentation.error_mapper import map_exception
 from app.presentation.app_exceptions import AppError
+from app.presentation.dto import item_details_dto
 
 from app.presentation.dto import (
     item_list_dto,
@@ -313,3 +314,33 @@ class StoreAppService:
 
     def ui_order_details(self, customer_user_id: int, order_id: int):
         return self.run(lambda: order_details_dto(self.get_order_details(customer_user_id, order_id)))
+
+    def get_item_details(self, item_id: int) -> dict:
+        item = self.item_repo.get_by_id(item_id)
+        if not item:
+            raise AppError("Item not found")
+
+        # categories (optional)
+        categories = []
+        try:
+            cats = self.item_category_repo.list_categories_for_item(item_id)
+            categories = [c.name for c in cats]
+        except Exception:
+            categories = []
+
+        # pictures (optional)
+        pictures = []
+        main_pic = None
+        try:
+            pics = self.picture_repo.list_by_item(item_id)
+            pictures = [p.file_path for p in pics]
+            main = self.picture_repo.get_main(item_id)
+            main_pic = main.file_path if main else None
+        except Exception:
+            pictures = []
+            main_pic = None
+
+        return {"item": item, "categories": categories, "pictures": pictures, "main_picture": main_pic}
+
+    def ui_item_details(self, item_id: int):
+        return self.run(lambda: item_details_dto(self.get_item_details(item_id)))
