@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import os
 from tkinter import ttk, messagebox
+from PIL import Image, ImageTk
 
 from app.ui.views.base_view import BaseView
 from app.ui.service_provider import store_app_service
 
-import os
-from tkinter import ttk, messagebox
-from PIL import Image, ImageTk
 
 class ItemDetailsView(BaseView):
     def __init__(self, parent, *, on_navigate, set_status, state):
@@ -27,10 +26,10 @@ class ItemDetailsView(BaseView):
         ttk.Button(top, text="Go to Cart", command=lambda: self.on_navigate("cart")).pack(side="left", padx=8)
         ttk.Button(top, text="View 3D (stub)", command=self._view_3d_stub).pack(side="left", padx=8)
 
+        # --- Main image ---
         self.image_label = ttk.Label(self.content)
         self.image_label.pack(anchor="nw", pady=(8, 12))
-
-        self._tk_image = None  # IMPORTANT: keep reference
+        self._tk_image = None  # keep reference
 
         self.header = ttk.Label(self.content, text="", style="Title.TLabel")
         self.header.pack(anchor="nw", pady=(12, 4))
@@ -118,13 +117,13 @@ class ItemDetailsView(BaseView):
         cats = self.item.get("categories") or []
         self.cat_var.config(text=f"Categories: {', '.join(cats) if cats else '-'}")
 
-        # Pictures (paths only)
-        self.main_pic_var.config(text=self.item.get("main_picture") or "-")
-        self._load_image(self.item.get("main_picture"))
+        # Pictures
+        main_path = self.item.get("main_picture")
+        self.main_pic_var.config(text=main_path or "-")
+        self._load_image(main_path)
 
         for i in self.pics_list.get_children():
             self.pics_list.delete(i)
-
         for p in (self.item.get("pictures") or []):
             self.pics_list.insert("", "end", values=(p,))
 
@@ -158,9 +157,6 @@ class ItemDetailsView(BaseView):
 
         self.set_status("Added to cart")
         messagebox.showinfo("Added", "Item added to cart successfully.")
-
-    def _view_3d_stub(self):
-        messagebox.showinfo("3D", "3D viewer will be added in Stage 4 (VPython).")
 
     def add_to_favorites(self):
         if not self.state.is_logged_in or self.state.role != "CUSTOMER":
@@ -198,17 +194,28 @@ class ItemDetailsView(BaseView):
         self.set_status("Removed from favorites")
         messagebox.showinfo("Favorites", "Removed from favorites.")
 
+    def _view_3d_stub(self):
+        messagebox.showinfo("3D", "3D viewer will be added in Stage 4 (VPython).")
+
     def _load_image(self, path: str, max_size=(360, 360)):
+        # Clear previous image
+        self._tk_image = None
+        self.image_label.config(image="", text="")
+
         if not path:
             self.image_label.config(text="No image")
             return
 
-        if not os.path.exists(path):
+        # Resolve relative path (stored in DB) -> absolute path based on project root
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        abs_path = os.path.normpath(os.path.join(project_root, path))
+
+        if not os.path.exists(abs_path):
             self.image_label.config(text=f"Image not found: {path}")
             return
 
         try:
-            img = Image.open(path)
+            img = Image.open(abs_path)
             img.thumbnail(max_size)
             self._tk_image = ImageTk.PhotoImage(img)
             self.image_label.config(image=self._tk_image, text="")

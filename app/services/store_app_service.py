@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 
+from datetime import datetime, timezone
+
 from app.models.user import User
 
 from app.repositories.user_repository import UserRepository
@@ -34,17 +36,16 @@ from app.services.history_service import HistoryService
 from app.presentation.app_result import AppResult
 from app.presentation.error_mapper import map_exception
 from app.presentation.app_exceptions import AppError
-from app.presentation.dto import item_details_dto
-
-from datetime import datetime, timezone
-from app.db.connection import get_connection
-
 from app.presentation.dto import (
     item_list_dto,
+    item_details_dto,
     cart_dto,
     order_list_dto,
     order_details_dto,
 )
+
+from app.db.connection import get_connection
+
 
 @dataclass
 class StoreAppService:
@@ -53,8 +54,8 @@ class StoreAppService:
     UI should talk ONLY to this service (no direct repository access).
 
     Notes:
+    - Prices in DB are base currency EUR.
     - Currency API calls are controlled internally by CartService/CurrencyService flags.
-    - Prices in DB are base currency EUR (snapshot in orders).
     """
 
     # Repos
@@ -91,10 +92,6 @@ class StoreAppService:
 
     @classmethod
     def create_default(cls) -> "StoreAppService":
-        """
-        Create a fully wired instance with default repositories/services.
-        UI can call StoreAppService.create_default() once and reuse it.
-        """
         user_repo = UserRepository()
         admin_repo = AdminRepository()
         customer_repo = CustomerRepository()
@@ -165,12 +162,9 @@ class StoreAppService:
     # ---------- Auth / Roles ----------
 
     def register_customer(self, username: str, email: str, name: str, password: str, currency: str = "EUR") -> User:
-        try:
-            user = self.auth.register(username=username, email=email, name=name, password=password)
-            self.roles.make_customer(user.id, currency=currency)
-            return self.roles.enrich_user_role(user)
-        except Exception as e:
-            raise AppError(str(e))
+        user = self.auth.register(username=username, email=email, name=name, password=password)
+        self.roles.make_customer(user.id, currency=currency)
+        return self.roles.enrich_user_role(user)
 
     def login(self, email: str, password: str) -> User:
         user = self.auth.login(email=email, password=password)
@@ -190,64 +184,65 @@ class StoreAppService:
     def list_items(self) -> List[Dict]:
         items = self.item_repo.list_all() or []
         return [
-            {
-                "item_id": it.id,
-                "name": it.name,
-                "price_base": float(it.price),
-                "currency": self.base_currency,
-            }
+            {"item_id": it.id, "name": it.name, "price_base": float(it.price), "currency": self.base_currency}
             for it in items
         ]
 
-    def get_item_details(self, item_id: int) -> Dict:
-        it = self.item_repo.get_by_id(item_id)
-        if it is None:
+    def get_item_details(self, item_id: int) -> dict:
+        """
+        Returns a structure that item_details_dto expects:
+        {
+          "item": <Item model>,
+          "categories": [str, ...],
+          "pictures": [str, ...],          # file paths
+          "main_picture": str | None       # file path
+        }
+        """
+        item = self.item_repo.get_by_id(item_id)
+        if not item:
             raise AppError("Item not found")
 
-        cats = self.item_category_repo.get_categories_for_item(item_id)
-        pics = self.picture_repo.get_pictures_for_item(item_id)
-        main_pic = self.picture_repo.get_main_picture(item_id)
+        # Use direct SQL to avoid repo-method-name mismatches
+        conn = get_connection()
+        try:
+            # Categories (names)
+            cur = conn.execute(
+                """
+                SELECT c.Name AS Name
+                FROM "Item_Category" ic
+                JOIN "Category" c ON c.ID = ic.CategoryID
+                WHERE ic.ItemID = ?
+                ORDER BY c.Name ASC
+                """,
+                (int(item_id),),
+            )
+            categories = [r["Name"] for r in cur.fetchall()]
 
-        return {
-            "item": {
-                "item_id": it.id,
-                "name": it.name,
-                "description": it.description,
-                "price_base": float(it.price),
-                "currency": self.base_currency,
-                "dimensions": {
-                    "length": it.dimensions.length,
-                    "width": it.dimensions.width,
-                    "height": it.dimensions.height,
-                },
-                "weight": it.weight,
-            },
-            "categories": [{"id": c.id, "name": c.name} for c in cats],
-            "pictures": [{"id": p.id, "file_path": p.file_path, "is_main": p.is_main} for p in pics],
-            "main_picture": {"id": main_pic.id, "file_path": main_pic.file_path} if main_pic else None,
-        }
+            # Pictures (paths)
+            cur = conn.execute(
+                """
+                SELECT FilePath, IsMain
+                FROM "Picture"
+                WHERE ItemID = ?
+                ORDER BY IsMain DESC, ID ASC
+                """,
+                (int(item_id),),
+            )
+            pics = cur.fetchall()
 
-    # ---------- Favorites ----------
+        finally:
+            conn.close()
 
-    def add_favorite(self, customer_user_id: int, item_id: int) -> None:
-        self.favorites.add_favorite(customer_user_id, item_id)
+        pictures = [p["FilePath"] for p in pics] if pics else []
+        main_pic = None
+        for p in pics:
+            if int(p["IsMain"]) == 1:
+                main_pic = p["FilePath"]
+                break
+        if main_pic is None and pictures:
+            main_pic = pictures[0]
 
-    def remove_favorite(self, customer_user_id: int, item_id: int) -> None:
-        self.favorites.remove_favorite(customer_user_id, item_id)
-
-    def list_favorites(self, customer_user_id: int) -> List[Dict]:
-        return self.favorites.list_favorites(customer_user_id)
-
-    def is_favorite(self, customer_user_id: int, item_id: int) -> bool:
-        return self.favorites.is_favorite(customer_user_id, item_id)
-
-    # ---------- History ----------
-
-    def record_view(self, customer_user_id: int, item_id: int) -> None:
-        self.history.record_view(customer_user_id, item_id)
-
-    def list_history(self, customer_user_id: int, limit: int = 50) -> List[Dict]:
-        return self.history.list_history(customer_user_id, limit=limit)
+        return {"item": item, "categories": categories, "pictures": pictures, "main_picture": main_pic}
 
     # ---------- Cart ----------
 
@@ -269,7 +264,6 @@ class StoreAppService:
 
     def proceed_to_checkout(self, customer_user_id: int) -> int:
         """
-        Your chosen behavior:
         Proceed to checkout = successful purchase (no payment simulation).
         Creates order snapshot and empties cart.
         """
@@ -284,26 +278,25 @@ class StoreAppService:
     # ---------- UI-safe wrappers ----------
 
     def run(self, fn, *args, **kwargs) -> AppResult:
-        """
-        Execute an operation and return AppResult (no exceptions bubble to UI).
-        """
         try:
             return AppResult.success(fn(*args, **kwargs))
         except Exception as e:
             code, msg = map_exception(e)
             return AppResult.fail(code, msg)
 
-    # Examples UI can call:
     def ui_login(self, email: str, password: str) -> AppResult:
         return self.run(self.login, email, password)
 
     def ui_register_customer(self, username: str, email: str, name: str, password: str, currency: str = "EUR") -> AppResult:
         return self.run(self.register_customer, username, email, name, password, currency)
 
-    def ui_list_items(self):
+    def ui_list_items(self) -> AppResult:
         return self.run(lambda: item_list_dto(self.list_items()))
 
-    def ui_get_cart(self, customer_user_id: int, display_currency=None):
+    def ui_item_details(self, item_id: int) -> AppResult:
+        return self.run(lambda: item_details_dto(self.get_item_details(item_id)))
+
+    def ui_get_cart(self, customer_user_id: int, display_currency=None) -> AppResult:
         return self.run(lambda: cart_dto(self.get_cart(customer_user_id, display_currency)))
 
     def ui_add_to_cart(self, customer_user_id: int, item_id: int, quantity: int = 1) -> AppResult:
@@ -312,164 +305,133 @@ class StoreAppService:
     def ui_checkout(self, customer_user_id: int) -> AppResult:
         return self.run(self.proceed_to_checkout, customer_user_id)
 
-    def ui_list_orders(self, customer_user_id: int, limit=50):
+    def ui_list_orders(self, customer_user_id: int, limit: int = 50) -> AppResult:
         return self.run(lambda: order_list_dto(self.list_orders(customer_user_id, limit)))
 
-    def ui_order_details(self, customer_user_id: int, order_id: int):
+    def ui_order_details(self, customer_user_id: int, order_id: int) -> AppResult:
         return self.run(lambda: order_details_dto(self.get_order_details(customer_user_id, order_id)))
 
-    def get_item_details(self, item_id: int) -> dict:
-        item = self.item_repo.get_by_id(item_id)
-        if not item:
-            raise AppError("Item not found")
-
-        # categories (optional)
-        categories = []
-        try:
-            cats = self.item_category_repo.list_categories_for_item(item_id)
-            categories = [c.name for c in cats]
-        except Exception:
-            categories = []
-
-        # pictures (optional)
-        pictures = []
-        main_pic = None
-        try:
-            pics = self.picture_repo.list_by_item(item_id)
-            pictures = [p.file_path for p in pics]
-            main = self.picture_repo.get_main(item_id)
-            main_pic = main.file_path if main else None
-        except Exception:
-            pictures = []
-            main_pic = None
-
-        return {"item": item, "categories": categories, "pictures": pictures, "main_picture": main_pic}
-
-    def ui_item_details(self, item_id: int):
-        return self.run(lambda: item_details_dto(self.get_item_details(item_id)))
-
-    # ---------------- Favorites (UI-safe) ----------------
+    # ---------------- Favorites (UI-safe via direct SQL) ----------------
 
     def _ensure_customer(self, customer_user_id: int) -> None:
         conn = get_connection()
         try:
-            row = conn.execute(
-                'SELECT UserID FROM "Customer" WHERE UserID = ?',
-                (customer_user_id,),
-            ).fetchone()
+            row = conn.execute('SELECT UserID FROM "Customer" WHERE UserID = ?', (customer_user_id,)).fetchone()
             if not row:
                 raise AppError("Customer not found")
         finally:
             conn.close()
 
-    def add_favorite(self, customer_user_id: int, item_id: int) -> None:
-        self._ensure_customer(customer_user_id)
-        conn = get_connection()
-        try:
-            # Ensure item exists
-            it = conn.execute('SELECT ID FROM "Item" WHERE ID = ?', (item_id,)).fetchone()
-            if not it:
-                raise AppError("Item not found")
+    def ui_add_favorite(self, customer_user_id: int, item_id: int) -> AppResult:
+        def op():
+            self._ensure_customer(customer_user_id)
+            conn = get_connection()
+            try:
+                it = conn.execute('SELECT ID FROM "Item" WHERE ID = ?', (int(item_id),)).fetchone()
+                if not it:
+                    raise AppError("Item not found")
 
-            conn.execute(
-                'INSERT OR IGNORE INTO "Favorites"(CustomerUserID, ItemID) VALUES (?, ?)',
-                (customer_user_id, item_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+                conn.execute(
+                    'INSERT OR IGNORE INTO "Favorites"(CustomerUserID, ItemID) VALUES (?, ?)',
+                    (int(customer_user_id), int(item_id)),
+                )
+                conn.commit()
+                return True
+            finally:
+                conn.close()
 
-    def remove_favorite(self, customer_user_id: int, item_id: int) -> None:
-        self._ensure_customer(customer_user_id)
-        conn = get_connection()
-        try:
-            conn.execute(
-                'DELETE FROM "Favorites" WHERE CustomerUserID = ? AND ItemID = ?',
-                (customer_user_id, item_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        return self.run(op)
 
-    def list_favorites(self, customer_user_id: int) -> list[dict]:
-        self._ensure_customer(customer_user_id)
-        conn = get_connection()
-        try:
-            cur = conn.execute(
-                """
-                SELECT i.ID as ItemID, i.Name as Name, i.Price as Price
-                FROM "Favorites" f
-                JOIN "Item" i ON i.ID = f.ItemID
-                WHERE f.CustomerUserID = ?
-                ORDER BY i.ID ASC
-                """,
-                (customer_user_id,),
-            )
-            return [
-                {"id": int(r["ItemID"]), "name": r["Name"], "price": float(r["Price"]), "currency": "EUR"}
-                for r in cur.fetchall()
-            ]
-        finally:
-            conn.close()
+    def ui_remove_favorite(self, customer_user_id: int, item_id: int) -> AppResult:
+        def op():
+            self._ensure_customer(customer_user_id)
+            conn = get_connection()
+            try:
+                conn.execute(
+                    'DELETE FROM "Favorites" WHERE CustomerUserID = ? AND ItemID = ?',
+                    (int(customer_user_id), int(item_id)),
+                )
+                conn.commit()
+                return True
+            finally:
+                conn.close()
 
-    def ui_add_favorite(self, customer_user_id: int, item_id: int):
-        return self.run(lambda: (self.add_favorite(customer_user_id, item_id), True)[1])
+        return self.run(op)
 
-    def ui_remove_favorite(self, customer_user_id: int, item_id: int):
-        return self.run(lambda: (self.remove_favorite(customer_user_id, item_id), True)[1])
+    def ui_list_favorites(self, customer_user_id: int) -> AppResult:
+        def op():
+            self._ensure_customer(customer_user_id)
+            conn = get_connection()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT i.ID as ItemID, i.Name as Name, i.Price as Price
+                    FROM "Favorites" f
+                    JOIN "Item" i ON i.ID = f.ItemID
+                    WHERE f.CustomerUserID = ?
+                    ORDER BY i.ID ASC
+                    """,
+                    (int(customer_user_id),),
+                )
+                return [
+                    {"id": int(r["ItemID"]), "name": r["Name"], "price": float(r["Price"]), "currency": "EUR"}
+                    for r in cur.fetchall()
+                ]
+            finally:
+                conn.close()
 
-    def ui_list_favorites(self, customer_user_id: int):
-        return self.run(lambda: self.list_favorites(customer_user_id))
+        return self.run(op)
 
-    # ---------------- History (UI-safe) ----------------
+    # ---------------- History (UI-safe via direct SQL) ----------------
 
-    def record_view(self, customer_user_id: int, item_id: int) -> None:
-        self._ensure_customer(customer_user_id)
-        conn = get_connection()
-        try:
-            it = conn.execute('SELECT ID FROM "Item" WHERE ID = ?', (item_id,)).fetchone()
-            if not it:
-                return  # silently ignore
+    def ui_record_view(self, customer_user_id: int, item_id: int) -> AppResult:
+        def op():
+            self._ensure_customer(customer_user_id)
+            conn = get_connection()
+            try:
+                it = conn.execute('SELECT ID FROM "Item" WHERE ID = ?', (int(item_id),)).fetchone()
+                if not it:
+                    return True
 
-            ts = datetime.now(timezone.utc).isoformat()
-            conn.execute(
-                'INSERT INTO "History"(CustomerUserID, ItemID, ViewedAt) VALUES (?, ?, ?)',
-                (customer_user_id, item_id, ts),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+                ts = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    'INSERT INTO "History"(CustomerUserID, ItemID, ViewedAt) VALUES (?, ?, ?)',
+                    (int(customer_user_id), int(item_id), ts),
+                )
+                conn.commit()
+                return True
+            finally:
+                conn.close()
 
-    def list_history(self, customer_user_id: int, limit: int = 50) -> list[dict]:
-        self._ensure_customer(customer_user_id)
-        conn = get_connection()
-        try:
-            cur = conn.execute(
-                """
-                SELECT h.ViewedAt as ViewedAt, i.ID as ItemID, i.Name as Name, i.Price as Price
-                FROM "History" h
-                JOIN "Item" i ON i.ID = h.ItemID
-                WHERE h.CustomerUserID = ?
-                ORDER BY h.ViewedAt DESC
-                LIMIT ?
-                """,
-                (customer_user_id, int(limit)),
-            )
-            return [
-                {
-                    "viewed_at": r["ViewedAt"],
-                    "item_id": int(r["ItemID"]),
-                    "name": r["Name"],
-                    "price": float(r["Price"]),
-                    "currency": "EUR",
-                }
-                for r in cur.fetchall()
-            ]
-        finally:
-            conn.close()
+        return self.run(op)
 
-    def ui_record_view(self, customer_user_id: int, item_id: int):
-        return self.run(lambda: (self.record_view(customer_user_id, item_id), True)[1])
+    def ui_list_history(self, customer_user_id: int, limit: int = 50) -> AppResult:
+        def op():
+            self._ensure_customer(customer_user_id)
+            conn = get_connection()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT h.ViewedAt as ViewedAt, i.ID as ItemID, i.Name as Name, i.Price as Price
+                    FROM "History" h
+                    JOIN "Item" i ON i.ID = h.ItemID
+                    WHERE h.CustomerUserID = ?
+                    ORDER BY h.ViewedAt DESC
+                    LIMIT ?
+                    """,
+                    (int(customer_user_id), int(limit)),
+                )
+                return [
+                    {
+                        "viewed_at": r["ViewedAt"],
+                        "item_id": int(r["ItemID"]),
+                        "name": r["Name"],
+                        "price": float(r["Price"]),
+                        "currency": "EUR",
+                    }
+                    for r in cur.fetchall()
+                ]
+            finally:
+                conn.close()
 
-    def ui_list_history(self, customer_user_id: int, limit: int = 50):
-        return self.run(lambda: self.list_history(customer_user_id, limit=limit))
+        return self.run(op)
