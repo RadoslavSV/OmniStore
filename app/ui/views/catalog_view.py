@@ -25,6 +25,9 @@ class CatalogView(BaseView):
         ttk.Button(top, text="View Details", command=self.open_details).pack(side="left", padx=8)
         ttk.Button(top, text="Add to Cart", command=self.add_selected_to_cart).pack(side="left", padx=8)
         ttk.Button(top, text="Go to Cart", command=lambda: self.on_navigate("cart")).pack(side="left", padx=8)
+        ttk.Button(top, text="Add to Favorites", command=self.add_selected_to_favorites).pack(side="left", padx=8)
+        ttk.Button(top, text="Favorites", command=lambda: self.on_navigate("favorites")).pack(side="left", padx=8)
+        ttk.Button(top, text="History", command=lambda: self.on_navigate("history")).pack(side="left", padx=8)
 
         self.tree = ttk.Treeview(self.content, columns=("name", "price"), show="headings", height=14)
         self.tree.heading("name", text="Item")
@@ -102,3 +105,23 @@ class CatalogView(BaseView):
 
         self.set_status("Added to cart")
         messagebox.showinfo("Added", "Item added to cart successfully.")
+
+    def add_selected_to_favorites(self):
+        item_id = self._selected_item_id()
+        if not item_id:
+            self.set_status("Select an item first")
+            return
+
+        if not self.state.is_logged_in or self.state.role != "CUSTOMER":
+            self.set_status("Favorites are available for customers (please login)")
+            messagebox.showinfo("Login required", "Please login as customer to use favorites.")
+            return
+
+        user_id = self.state.session.user_id
+        result = store_app_service.ui_add_favorite(user_id, item_id)
+        if not result.ok:
+            self.set_status(result.error.message)
+            return
+
+        self.set_status("Added to favorites")
+        messagebox.showinfo("Favorites", "Added to favorites.")

@@ -12,6 +12,8 @@ from app.ui.views.catalog_view import CatalogView
 from app.ui.views.cart_view import CartView
 from app.ui.views.orders_view import OrdersView
 from app.ui.views.item_details_view import ItemDetailsView
+from app.ui.views.favorites_view import FavoritesView
+from app.ui.views.history_view import HistoryView
 
 class MainWindow:
     def __init__(self, root: tk.Tk):
@@ -77,6 +79,8 @@ class MainWindow:
         self.views["cart"] = CartView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
         self.views["orders"] = OrdersView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
         self.views["item_details"] = ItemDetailsView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
+        self.views["favorites"] = FavoritesView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
+        self.views["history"] = HistoryView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
 
         for v in self.views.values():
             v.grid(row=0, column=0, sticky="nsew")
@@ -94,10 +98,12 @@ class MainWindow:
         # Requires login
         self.nav_buttons["cart"] = ttk.Button(self.sidebar, text="Cart", style="Nav.TButton", command=lambda: self.show("cart"))
         self.nav_buttons["orders"] = ttk.Button(self.sidebar, text="Orders", style="Nav.TButton", command=lambda: self.show("orders"))
+        self.nav_buttons["favorites"] = ttk.Button(self.sidebar, text="Favorites", style="Nav.TButton", command=lambda: self.show("favorites"))
+        self.nav_buttons["history"] = ttk.Button(self.sidebar, text="History", style="Nav.TButton", command=lambda: self.show("history"))
 
         # Lay them out (we'll hide/show with grid_remove)
         row = 1
-        for key in ["login", "register", "catalog", "cart", "orders"]:
+        for key in ["login", "register", "catalog", "cart", "orders", "favorites", "history"]:
             self.nav_buttons[key].grid(row=row, column=0, sticky="ew", pady=4)
             row += 1
 

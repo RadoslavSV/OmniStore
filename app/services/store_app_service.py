@@ -36,6 +36,9 @@ from app.presentation.error_mapper import map_exception
 from app.presentation.app_exceptions import AppError
 from app.presentation.dto import item_details_dto
 
+from datetime import datetime, timezone
+from app.db.connection import get_connection
+
 from app.presentation.dto import (
     item_list_dto,
     cart_dto,
@@ -344,3 +347,129 @@ class StoreAppService:
 
     def ui_item_details(self, item_id: int):
         return self.run(lambda: item_details_dto(self.get_item_details(item_id)))
+
+    # ---------------- Favorites (UI-safe) ----------------
+
+    def _ensure_customer(self, customer_user_id: int) -> None:
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                'SELECT UserID FROM "Customer" WHERE UserID = ?',
+                (customer_user_id,),
+            ).fetchone()
+            if not row:
+                raise AppError("Customer not found")
+        finally:
+            conn.close()
+
+    def add_favorite(self, customer_user_id: int, item_id: int) -> None:
+        self._ensure_customer(customer_user_id)
+        conn = get_connection()
+        try:
+            # Ensure item exists
+            it = conn.execute('SELECT ID FROM "Item" WHERE ID = ?', (item_id,)).fetchone()
+            if not it:
+                raise AppError("Item not found")
+
+            conn.execute(
+                'INSERT OR IGNORE INTO "Favorites"(CustomerUserID, ItemID) VALUES (?, ?)',
+                (customer_user_id, item_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def remove_favorite(self, customer_user_id: int, item_id: int) -> None:
+        self._ensure_customer(customer_user_id)
+        conn = get_connection()
+        try:
+            conn.execute(
+                'DELETE FROM "Favorites" WHERE CustomerUserID = ? AND ItemID = ?',
+                (customer_user_id, item_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def list_favorites(self, customer_user_id: int) -> list[dict]:
+        self._ensure_customer(customer_user_id)
+        conn = get_connection()
+        try:
+            cur = conn.execute(
+                """
+                SELECT i.ID as ItemID, i.Name as Name, i.Price as Price
+                FROM "Favorites" f
+                JOIN "Item" i ON i.ID = f.ItemID
+                WHERE f.CustomerUserID = ?
+                ORDER BY i.ID ASC
+                """,
+                (customer_user_id,),
+            )
+            return [
+                {"id": int(r["ItemID"]), "name": r["Name"], "price": float(r["Price"]), "currency": "EUR"}
+                for r in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def ui_add_favorite(self, customer_user_id: int, item_id: int):
+        return self.run(lambda: (self.add_favorite(customer_user_id, item_id), True)[1])
+
+    def ui_remove_favorite(self, customer_user_id: int, item_id: int):
+        return self.run(lambda: (self.remove_favorite(customer_user_id, item_id), True)[1])
+
+    def ui_list_favorites(self, customer_user_id: int):
+        return self.run(lambda: self.list_favorites(customer_user_id))
+
+    # ---------------- History (UI-safe) ----------------
+
+    def record_view(self, customer_user_id: int, item_id: int) -> None:
+        self._ensure_customer(customer_user_id)
+        conn = get_connection()
+        try:
+            it = conn.execute('SELECT ID FROM "Item" WHERE ID = ?', (item_id,)).fetchone()
+            if not it:
+                return  # silently ignore
+
+            ts = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                'INSERT INTO "History"(CustomerUserID, ItemID, ViewedAt) VALUES (?, ?, ?)',
+                (customer_user_id, item_id, ts),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def list_history(self, customer_user_id: int, limit: int = 50) -> list[dict]:
+        self._ensure_customer(customer_user_id)
+        conn = get_connection()
+        try:
+            cur = conn.execute(
+                """
+                SELECT h.ViewedAt as ViewedAt, i.ID as ItemID, i.Name as Name, i.Price as Price
+                FROM "History" h
+                JOIN "Item" i ON i.ID = h.ItemID
+                WHERE h.CustomerUserID = ?
+                ORDER BY h.ViewedAt DESC
+                LIMIT ?
+                """,
+                (customer_user_id, int(limit)),
+            )
+            return [
+                {
+                    "viewed_at": r["ViewedAt"],
+                    "item_id": int(r["ItemID"]),
+                    "name": r["Name"],
+                    "price": float(r["Price"]),
+                    "currency": "EUR",
+                }
+                for r in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def ui_record_view(self, customer_user_id: int, item_id: int):
+        return self.run(lambda: (self.record_view(customer_user_id, item_id), True)[1])
+
+    def ui_list_history(self, customer_user_id: int, limit: int = 50):
+        return self.run(lambda: self.list_history(customer_user_id, limit=limit))
