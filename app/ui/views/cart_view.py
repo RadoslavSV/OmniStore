@@ -13,7 +13,6 @@ class CartView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Cart",
-            subtitle="Stage 2.2: real cart (EUR base) + checkout.",
         )
         self.state = state
 

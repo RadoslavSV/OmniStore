@@ -13,7 +13,6 @@ class FavoritesView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Favorites",
-            subtitle="Stage 3.1: customer favorites (EUR base).",
         )
         self.state = state
 

@@ -5,6 +5,9 @@ from tkinter import ttk, messagebox
 from app.ui.views.base_view import BaseView
 from app.ui.service_provider import store_app_service
 
+import os
+from tkinter import ttk, messagebox
+from PIL import Image, ImageTk
 
 class ItemDetailsView(BaseView):
     def __init__(self, parent, *, on_navigate, set_status, state):
@@ -13,7 +16,6 @@ class ItemDetailsView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Item Details",
-            subtitle="Stage 3.1: details + categories + pictures (paths) + add to cart (EUR base).",
         )
         self.state = state
         self.item = None  # DTO dict
@@ -24,6 +26,11 @@ class ItemDetailsView(BaseView):
         ttk.Button(top, text="Back to Catalog", command=lambda: self.on_navigate("catalog")).pack(side="left")
         ttk.Button(top, text="Go to Cart", command=lambda: self.on_navigate("cart")).pack(side="left", padx=8)
         ttk.Button(top, text="View 3D (stub)", command=self._view_3d_stub).pack(side="left", padx=8)
+
+        self.image_label = ttk.Label(self.content)
+        self.image_label.pack(anchor="nw", pady=(8, 12))
+
+        self._tk_image = None  # IMPORTANT: keep reference
 
         self.header = ttk.Label(self.content, text="", style="Title.TLabel")
         self.header.pack(anchor="nw", pady=(12, 4))
@@ -113,6 +120,7 @@ class ItemDetailsView(BaseView):
 
         # Pictures (paths only)
         self.main_pic_var.config(text=self.item.get("main_picture") or "-")
+        self._load_image(self.item.get("main_picture"))
 
         for i in self.pics_list.get_children():
             self.pics_list.delete(i)
@@ -189,3 +197,20 @@ class ItemDetailsView(BaseView):
 
         self.set_status("Removed from favorites")
         messagebox.showinfo("Favorites", "Removed from favorites.")
+
+    def _load_image(self, path: str, max_size=(360, 360)):
+        if not path:
+            self.image_label.config(text="No image")
+            return
+
+        if not os.path.exists(path):
+            self.image_label.config(text=f"Image not found: {path}")
+            return
+
+        try:
+            img = Image.open(path)
+            img.thumbnail(max_size)
+            self._tk_image = ImageTk.PhotoImage(img)
+            self.image_label.config(image=self._tk_image, text="")
+        except Exception as e:
+            self.image_label.config(text=f"Failed to load image: {e}")

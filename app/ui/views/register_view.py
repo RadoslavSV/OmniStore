@@ -13,7 +13,6 @@ class RegisterView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Register",
-            subtitle="Stage 2.2: real registration via StoreAppService.",
         )
         self.state = state
         self.on_state_changed = on_state_changed

@@ -13,7 +13,6 @@ class CatalogView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Catalog",
-            subtitle="Stage 2.3: select item → details, and add to cart (EUR base).",
         )
         self.state = state
         self.items_index = {}  # item_id -> dto

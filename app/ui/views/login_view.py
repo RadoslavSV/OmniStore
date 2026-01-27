@@ -13,7 +13,6 @@ class LoginView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Login",
-            subtitle="Stage 2.2: real login via StoreAppService.",
         )
         self.state = state
         self.on_state_changed = on_state_changed
@@ -49,7 +48,6 @@ class LoginView(BaseView):
             return
 
         user = result.data
-        # Currency in stage 2.2: keep EUR (no API usage)
         self.state.set_session(user_id=user.id, username=user.username, email=user.email, role=user.role, currency="EUR")
         self.on_state_changed()
         self.set_status("Logged in successfully")

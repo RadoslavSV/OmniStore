@@ -13,7 +13,6 @@ class OrdersView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Orders",
-            subtitle="Stage 2.2: real order history (EUR base).",
         )
         self.state = state
 

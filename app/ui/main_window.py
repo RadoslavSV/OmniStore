@@ -108,7 +108,7 @@ class MainWindow:
             row += 1
 
         self.sidebar.rowconfigure(row, weight=1)
-        ttk.Label(self.sidebar, text="Stage 2.3", style="Muted.TLabel").grid(row=row + 1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(self.sidebar, text="Version 8.0", style="Muted.TLabel").grid(row=row + 1, column=0, sticky="w", pady=(10, 0))
 
     # -------- State / UI refresh --------
 

@@ -13,7 +13,6 @@ class HistoryView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="History",
-            subtitle="Stage 3.1: recently viewed items (EUR base).",
         )
         self.state = state
 
