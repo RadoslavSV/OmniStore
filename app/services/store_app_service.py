@@ -310,6 +310,9 @@ class StoreAppService:
 
     def ui_order_details(self, customer_user_id: int, order_id: int) -> AppResult:
         return self.run(lambda: order_details_dto(self.get_order_details(customer_user_id, order_id)))
+    
+    def ui_remove_from_cart(self, customer_user_id: int, item_id: int) -> AppResult:
+        return self.run(self.remove_from_cart, customer_user_id, item_id)
 
     # ---------------- Favorites (UI-safe via direct SQL) ----------------
 
