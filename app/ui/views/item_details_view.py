@@ -15,10 +15,17 @@ class ItemDetailsView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Item Details",
+            subtitle="Stage 3.x: details + pictures + add to cart.",
         )
         self.state = state
         self.item = None  # DTO dict
 
+        # picture carousel state
+        self._pictures: list[str] = []
+        self._pic_index: int = 0
+        self._tk_image = None  # keep reference
+
+        # ----- Top nav -----
         top = ttk.Frame(self.content)
         top.pack(anchor="nw", fill="x")
 
@@ -26,18 +33,26 @@ class ItemDetailsView(BaseView):
         ttk.Button(top, text="Go to Cart", command=lambda: self.on_navigate("cart")).pack(side="left", padx=8)
         ttk.Button(top, text="View 3D (stub)", command=self._view_3d_stub).pack(side="left", padx=8)
 
-        # --- Main image ---
-        self.image_label = ttk.Label(self.content)
-        self.image_label.pack(anchor="nw", pady=(8, 12))
-        self._tk_image = None  # keep reference
+        ttk.Separator(self.content).pack(fill="x", pady=(10, 12))
 
-        self.header = ttk.Label(self.content, text="", style="Title.TLabel")
-        self.header.pack(anchor="nw", pady=(12, 4))
+        # ----- Main layout: left info + right image -----
+        body = ttk.Frame(self.content)
+        body.pack(fill="both", expand=True)
 
-        self.desc = ttk.Label(self.content, text="", wraplength=780, justify="left")
+        self.left = ttk.Frame(body)
+        self.left.pack(side="left", fill="both", expand=True, padx=(0, 12))
+
+        self.right = ttk.Frame(body)
+        self.right.pack(side="right", fill="y")
+
+        # ----- Left: text info -----
+        self.header = ttk.Label(self.left, text="", style="Title.TLabel")
+        self.header.pack(anchor="nw", pady=(0, 4))
+
+        self.desc = ttk.Label(self.left, text="", wraplength=720, justify="left")
         self.desc.pack(anchor="nw", pady=(0, 10))
 
-        info = ttk.Frame(self.content)
+        info = ttk.Frame(self.left)
         info.pack(anchor="nw", fill="x")
 
         self.dim_var = ttk.Label(info, text="")
@@ -52,9 +67,9 @@ class ItemDetailsView(BaseView):
         self.cat_var = ttk.Label(info, text="")
         self.cat_var.grid(row=3, column=0, sticky="w", pady=2)
 
-        ttk.Separator(self.content).pack(fill="x", pady=12)
+        ttk.Separator(self.left).pack(fill="x", pady=12)
 
-        actions = ttk.Frame(self.content)
+        actions = ttk.Frame(self.left)
         actions.pack(anchor="nw", fill="x")
 
         ttk.Label(actions, text="Quantity:").pack(side="left")
@@ -66,23 +81,26 @@ class ItemDetailsView(BaseView):
         ttk.Button(actions, text="Add to Favorites", command=self.add_to_favorites).pack(side="left", padx=8)
         ttk.Button(actions, text="Remove Favorite", command=self.remove_favorite).pack(side="left", padx=8)
 
-        ttk.Separator(self.content).pack(fill="x", pady=12)
+        # ----- Right: image + arrows -----
+        # A small frame for arrows + image
+        carousel = ttk.Frame(self.right)
+        carousel.pack(anchor="ne")
 
-        pics = ttk.Frame(self.content)
-        pics.pack(anchor="nw", fill="both", expand=True)
+        self.btn_prev = ttk.Button(carousel, text="◀", width=3, command=self._prev_picture)
+        self.btn_prev.grid(row=0, column=0, padx=(0, 6), sticky="n")
 
-        ttk.Label(pics, text="Main picture path:", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
-        self.main_pic_var = ttk.Label(pics, text="-")
-        self.main_pic_var.grid(row=1, column=0, sticky="w", pady=(0, 8))
+        self.image_label = ttk.Label(carousel, text="No image")
+        self.image_label.grid(row=0, column=1, sticky="n")
 
-        ttk.Label(pics, text="All pictures (paths):", style="Muted.TLabel").grid(row=2, column=0, sticky="w")
-        self.pics_list = ttk.Treeview(pics, columns=("path",), show="headings", height=6)
-        self.pics_list.heading("path", text="FilePath")
-        self.pics_list.column("path", width=740, stretch=True)
-        self.pics_list.grid(row=3, column=0, sticky="nsew", pady=(6, 0))
+        self.btn_next = ttk.Button(carousel, text="▶", width=3, command=self._next_picture)
+        self.btn_next.grid(row=0, column=2, padx=(6, 0), sticky="n")
 
-        pics.grid_rowconfigure(3, weight=1)
-        pics.grid_columnconfigure(0, weight=1)
+        # caption like "1/3"
+        self.pic_counter = ttk.Label(self.right, text="", style="Muted.TLabel")
+        self.pic_counter.pack(anchor="ne", pady=(6, 0))
+
+        # Hide arrows by default until we load pictures
+        self._update_carousel_controls()
 
     def on_show(self):
         self.load_item()
@@ -117,17 +135,130 @@ class ItemDetailsView(BaseView):
         cats = self.item.get("categories") or []
         self.cat_var.config(text=f"Categories: {', '.join(cats) if cats else '-'}")
 
-        # Pictures
-        main_path = self.item.get("main_picture")
-        self.main_pic_var.config(text=main_path or "-")
-        self._load_image(main_path)
+        # Pictures carousel
+        self._pictures = list(self.item.get("pictures") or [])
+        main = self.item.get("main_picture")
 
-        for i in self.pics_list.get_children():
-            self.pics_list.delete(i)
-        for p in (self.item.get("pictures") or []):
-            self.pics_list.insert("", "end", values=(p,))
+        # choose starting index: main picture if present
+        self._pic_index = 0
+        if main and self._pictures:
+            try:
+                self._pic_index = self._pictures.index(main)
+            except ValueError:
+                self._pic_index = 0
 
+        self._show_current_picture()
         self.set_status("Item loaded")
+
+    # ---------------- Pictures carousel ----------------
+
+    def _update_carousel_controls(self):
+        n = len(self._pictures)
+        if n <= 1:
+            self.btn_prev.state(["disabled"])
+            self.btn_next.state(["disabled"])
+            self.pic_counter.config(text="" if n == 0 else "1/1")
+        else:
+            self.btn_prev.state(["!disabled"])
+            self.btn_next.state(["!disabled"])
+            self.pic_counter.config(text=f"{self._pic_index + 1}/{n}")
+
+    def _prev_picture(self):
+        if not self._pictures:
+            return
+        self._pic_index = (self._pic_index - 1) % len(self._pictures)  # cyclic
+        self._show_current_picture()
+
+    def _next_picture(self):
+        if not self._pictures:
+            return
+        self._pic_index = (self._pic_index + 1) % len(self._pictures)  # cyclic
+        self._show_current_picture()
+
+    def _show_current_picture(self):
+        if not self._pictures:
+            self._tk_image = None
+            self.image_label.config(image="", text="No image")
+            self._update_carousel_controls()
+            return
+
+        path = self._pictures[self._pic_index]
+        self._load_image(path)
+        self._update_carousel_controls()
+
+    def _load_image(self, path: str, frame_size=(420, 320), bg_color=(0, 0, 0)):
+        """
+        Loads image into a fixed-size frame (letterbox).
+        - Keeps arrows perfectly aligned.
+        - Adds black bars where needed.
+        """
+        # Clear previous image
+        self._tk_image = None
+        self.image_label.config(image="", text="")
+
+        if not path:
+            # Render an empty black frame (optional) or just "No image"
+            frame = Image.new("RGB", frame_size, bg_color)
+            self._tk_image = ImageTk.PhotoImage(frame)
+            self.image_label.config(image=self._tk_image, text="")
+            return
+
+        # Resolve DB relative path -> absolute path based on project root (OmniStore/)
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        abs_path = os.path.normpath(os.path.join(project_root, path))
+
+        # If missing, still show fixed black frame (no layout shifts)
+        if not os.path.exists(abs_path):
+            frame = Image.new("RGB", frame_size, bg_color)
+            self._tk_image = ImageTk.PhotoImage(frame)
+            self.image_label.config(image=self._tk_image, text="")
+            return
+
+        try:
+            img = Image.open(abs_path)
+
+            # Convert to RGB to avoid issues with palette/alpha in some PNGs
+            # (If you want to preserve transparency, we can do RGBA; but black bars are fine with RGB.)
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+
+            # Fit inside frame while keeping aspect ratio
+            fw, fh = frame_size
+            iw, ih = img.size
+
+            # Compute scale
+            scale = min(fw / iw, fh / ih)
+            new_w = max(1, int(iw * scale))
+            new_h = max(1, int(ih * scale))
+
+            resized = img.resize((new_w, new_h), Image.LANCZOS)
+
+            # Create background frame and paste centered
+            frame = Image.new("RGB", (fw, fh), bg_color)
+
+            # If resized has alpha, paste using alpha as mask
+            if resized.mode == "RGBA":
+                # Put RGBA over black -> still looks correct
+                tmp = Image.new("RGBA", (fw, fh), bg_color + (255,))
+                x = (fw - new_w) // 2
+                y = (fh - new_h) // 2
+                tmp.paste(resized, (x, y), resized)
+                frame = tmp.convert("RGB")
+            else:
+                x = (fw - new_w) // 2
+                y = (fh - new_h) // 2
+                frame.paste(resized, (x, y))
+
+            self._tk_image = ImageTk.PhotoImage(frame)
+            self.image_label.config(image=self._tk_image, text="")
+
+        except Exception as e:
+            # On error, show fixed black frame (no layout shifts)
+            frame = Image.new("RGB", frame_size, bg_color)
+            self._tk_image = ImageTk.PhotoImage(frame)
+            self.image_label.config(image=self._tk_image, text="")
+
+    # ---------------- Actions ----------------
 
     def add_to_cart(self):
         if not self.state.is_logged_in:
@@ -196,28 +327,3 @@ class ItemDetailsView(BaseView):
 
     def _view_3d_stub(self):
         messagebox.showinfo("3D", "3D viewer will be added in Stage 4 (VPython).")
-
-    def _load_image(self, path: str, max_size=(360, 360)):
-        # Clear previous image
-        self._tk_image = None
-        self.image_label.config(image="", text="")
-
-        if not path:
-            self.image_label.config(text="No image")
-            return
-
-        # Resolve relative path (stored in DB) -> absolute path based on project root
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        abs_path = os.path.normpath(os.path.join(project_root, path))
-
-        if not os.path.exists(abs_path):
-            self.image_label.config(text=f"Image not found: {path}")
-            return
-
-        try:
-            img = Image.open(abs_path)
-            img.thumbnail(max_size)
-            self._tk_image = ImageTk.PhotoImage(img)
-            self.image_label.config(image=self._tk_image, text="")
-        except Exception as e:
-            self.image_label.config(text=f"Failed to load image: {e}")
