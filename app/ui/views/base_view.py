@@ -22,7 +22,7 @@ class BaseView(ttk.Frame):
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 12))
 
-        ttk.Label(header, text=title, style="Title.TLabel").pack(anchor="w")
+        ttk.Label(header, text=title, style="ContentTitle.TLabel").pack(anchor="w")
         if subtitle:
             ttk.Label(header, text=subtitle, style="Muted.TLabel").pack(anchor="w")
 

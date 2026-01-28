@@ -46,7 +46,7 @@ class ItemDetailsView(BaseView):
         self.right.pack(side="right", fill="y")
 
         # ----- Left: text info -----
-        self.header = ttk.Label(self.left, text="", style="Title.TLabel")
+        self.header = ttk.Label(self.left, text="", style="ContentTitle.TLabel")
         self.header.pack(anchor="nw", pady=(0, 4))
 
         self.desc = ttk.Label(self.left, text="", wraplength=720, justify="left")
