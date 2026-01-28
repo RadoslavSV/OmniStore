@@ -25,8 +25,6 @@ class CatalogView(BaseView):
         ttk.Button(top, text="Add to Cart", command=self.add_selected_to_cart).pack(side="left", padx=8)
         ttk.Button(top, text="Go to Cart", command=lambda: self.on_navigate("cart")).pack(side="left", padx=8)
         ttk.Button(top, text="Add to Favorites", command=self.add_selected_to_favorites).pack(side="left", padx=8)
-        ttk.Button(top, text="Favorites", command=lambda: self.on_navigate("favorites")).pack(side="left", padx=8)
-        ttk.Button(top, text="History", command=lambda: self.on_navigate("history")).pack(side="left", padx=8)
 
         self.tree = ttk.Treeview(self.content, columns=("name", "price"), show="headings", height=14)
         self.tree.heading("name", text="Item")
