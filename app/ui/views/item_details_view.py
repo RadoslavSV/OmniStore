@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 from app.ui.views.base_view import BaseView
 from app.ui.service_provider import store_app_service
 
+from app.ui.three_d_launcher import launch_vpython_viewer, Item3DInfo
 
 class ItemDetailsView(BaseView):
     def __init__(self, parent, *, on_navigate, set_status, state):
@@ -326,4 +327,26 @@ class ItemDetailsView(BaseView):
         messagebox.showinfo("Favorites", "Removed from favorites.")
 
     def _view_3d_stub(self):
-        messagebox.showinfo("3D", "3D viewer will be added in Stage 4 (VPython).")
+        if not self.item:
+            messagebox.showinfo("3D", "No item loaded.")
+            return
+
+        d = self.item.get("dimensions") or {}
+        try:
+            info = Item3DInfo(
+                title=self.item.get("name") or "Item",
+                length=float(d["length"]),
+                width=float(d["width"]),
+                height=float(d["height"]),
+                weight=float(self.item.get("weight")) if self.item.get("weight") is not None else None,
+                price=float(self.item.get("price")) if self.item.get("price") is not None else None,
+                currency=str(self.item.get("currency") or "EUR"),
+            )
+        except Exception:
+            messagebox.showerror("3D", "Item dimensions are missing/invalid.")
+            return
+
+        launch_vpython_viewer(info)
+        self.set_status("Opened 3D viewer")
+
+
