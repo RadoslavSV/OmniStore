@@ -28,9 +28,9 @@ class CatalogView(BaseView):
 
         self.tree = ttk.Treeview(self.content, columns=("name", "price"), show="headings", height=14)
         self.tree.heading("name", text="Item")
-        self.tree.heading("price", text="Price (EUR)")  # will be updated in refresh()
+        self.tree.heading("price", text="Price (EUR)")
         self.tree.column("name", width=520, stretch=True)
-        self.tree.column("price", width=120, stretch=False, anchor="e")
+        self.tree.column("price", width=140, stretch=False, anchor="e")
         self.tree.pack(fill="both", expand=True, pady=10)
 
         self.tree.bind("<Double-1>", lambda _e: self.open_details())
@@ -40,24 +40,19 @@ class CatalogView(BaseView):
     def on_show(self):
         self.refresh()
 
-    # ---- Helpers ----
-
-    def _current_currency(self) -> str:
-        """
-        Safe currency getter:
-        - if guest (session is None) -> EUR
-        - if logged in -> session.currency (fallback EUR)
-        """
-        s = getattr(self.state, "session", None)
-        cur = getattr(s, "currency", None)
-        return (cur or "EUR").upper()
+    def _get_display_currency(self) -> str:
+        # Guest -> EUR; Logged-in -> session currency
+        if not self.state.is_logged_in or not getattr(self.state, "session", None):
+            return "EUR"
+        c = getattr(self.state.session, "currency", None) or "EUR"
+        return str(c).upper()
 
     def refresh(self):
         for i in self.tree.get_children():
             self.tree.delete(i)
         self.items_index.clear()
 
-        currency = self._current_currency()
+        currency = self._get_display_currency()
         self.tree.heading("price", text=f"Price ({currency})")
 
         result = store_app_service.ui_list_items(display_currency=currency)
