@@ -25,10 +25,10 @@ class HistoryView(BaseView):
         self.tree = ttk.Treeview(self.content, columns=("time", "name", "price"), show="headings", height=14)
         self.tree.heading("time", text="Viewed At (UTC)")
         self.tree.heading("name", text="Item")
-        self.tree.heading("price", text="Price (EUR)")
+        self.tree.heading("price", text="Price")
         self.tree.column("time", width=240, stretch=False)
         self.tree.column("name", width=420, stretch=True)
-        self.tree.column("price", width=120, stretch=False, anchor="e")
+        self.tree.column("price", width=180, stretch=False, anchor="e")
         self.tree.pack(fill="both", expand=True, pady=10)
 
         self.tree.bind("<Double-1>", lambda _e: self.open_item())
@@ -41,8 +41,7 @@ class HistoryView(BaseView):
         if not sel:
             return None
         try:
-            # iid is item_id in our insert
-            return int(sel[0])
+            return int(sel[0])  # iid is item_id
         except Exception:
             return None
 
@@ -57,6 +56,9 @@ class HistoryView(BaseView):
             self.set_status("History is available for customers")
             return
 
+        currency = self.state.session.currency or "EUR"
+        self.tree.heading("price", text=f"Price ({currency})")
+
         user_id = self.state.session.user_id
         result = store_app_service.ui_list_history(user_id, limit=50)
         if not result.ok:
@@ -70,11 +72,20 @@ class HistoryView(BaseView):
 
         for r in rows:
             item_id = int(r["item_id"])
+
+            base_price = float(r["price"])
+            shown_price = base_price
+            if currency != "EUR":
+                try:
+                    shown_price = store_app_service.currency.convert(base_price, to_currency=currency, from_currency="EUR")
+                except Exception:
+                    shown_price = base_price
+
             self.tree.insert(
                 "",
                 "end",
                 iid=str(item_id),
-                values=(r["viewed_at"], r["name"], f'{r["price"]:.2f}'),
+                values=(r["viewed_at"], r["name"], f"{shown_price:.2f} {currency}"),
             )
 
         self.set_status(f"Loaded {len(rows)} history entries")

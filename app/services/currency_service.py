@@ -19,36 +19,56 @@ class UnsupportedCurrencyError(CurrencyServiceError):
 class CurrencyService:
     """
     Currency conversion service using exchangerate.host /live (apilayer).
-    Goals:
-    - ONE request per TTL (fetch ALL quotes, no per-currency fetch) -> protects quota & avoids rate-limit bursts
-    - In-memory cache with TTL
-    - Cross-rate conversion supported (from -> to) via SOURCE currency (usually USD)
-    - Graceful fallback if missing key or temporary rate-limit (use cached rates if available)
+
+    IMPORTANT DEV behavior:
+    - If OMNISTORE_ENABLE_CURRENCY_API != "1" -> NO HTTP calls.
+    - In DEV mode we use a small mock table (base EUR) so UI can be tested realistically.
+    - When API is enabled -> uses /live quotes with TTL cache.
     """
 
     live_url: str = "https://api.exchangerate.host/live"
-    cache_ttl_seconds: int = 6 * 3600  # 6 hours by default (better for 100 requests/month)
-    access_key: Optional[str] = None  # or env EXCHANGERATE_HOST_KEY
+    cache_ttl_seconds: int = 6 * 3600  # 6 hours by default
+    access_key: Optional[str] = None  # env EXCHANGERATE_HOST_KEY
 
+    # API data (source usually USD)
     _source_currency: str = "USD"
-    _quotes_cache: Dict[str, float] = None  # e.g. {"USDEUR": 0.92, "USDGBP": 0.79, ...}
+    _quotes_cache: Dict[str, float] = None  # e.g. {"USDEUR": 0.92, ...}
     _cache_timestamp: float = 0.0
+
+    # DEV mock rates (base EUR)
+    _dev_base: str = "EUR"
+    _dev_rates_from_eur: Dict[str, float] = None
 
     def __post_init__(self):
         if self._quotes_cache is None:
             self._quotes_cache = {}
-        # Hard switch: API disabled by default during development
-        _enable = os.getenv("OMNISTORE_ENABLE_CURRENCY_API", "0") == "1"
 
-        if not _enable:
+        # Small stable dev table (rough rates; enough to visually confirm conversion works)
+        if self._dev_rates_from_eur is None:
+            self._dev_rates_from_eur = {
+                "EUR": 1.0,
+                "USD": 1.10,
+                "GBP": 0.86,
+                "BGN": 1.95583,
+                "RON": 4.95,
+                "TRY": 35.0,
+                "CHF": 0.95,
+                "JPY": 165.0,
+                "CAD": 1.48,
+                "AUD": 1.65,
+            }
+
+        # Hard switch: API disabled by default during development
+        enable_api = os.getenv("OMNISTORE_ENABLE_CURRENCY_API", "0") == "1"
+
+        if not enable_api:
             # Force-disable API calls even if a key exists in env
             self.access_key = None
         else:
             if self.access_key is None:
                 self.access_key = os.getenv("EXCHANGERATE_HOST_KEY")
 
-
-    # ---------- Internal ----------
+    # ---------- Internal (API mode) ----------
 
     def _api_get(self, url: str, params: dict) -> dict:
         try:
@@ -56,15 +76,11 @@ class CurrencyService:
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.HTTPError as e:
-            # Special-case 429: rate limit. We'll handle gracefully in _ensure_loaded().
             raise CurrencyServiceError(f"HTTP error: {e}") from e
         except Exception as e:
             raise CurrencyServiceError("Failed to fetch exchange rates (network/HTTP error).") from e
 
     def _fetch_all_quotes_live(self) -> None:
-        """
-        Fetches ALL quotes in one call (no 'currencies' param) to avoid extra calls.
-        """
         params = {}
         if self.access_key:
             params["access_key"] = self.access_key
@@ -87,19 +103,11 @@ class CurrencyService:
         self._cache_timestamp = time.time()
 
     def _ensure_loaded(self) -> None:
-        """
-        Loads cache if empty/expired.
-        If rate-limited (429), keeps existing cache (if any) and continues.
-        If no cache at all, does graceful fallback (no conversion).
-        """
         now = time.time()
         expired = (now - self._cache_timestamp) > self.cache_ttl_seconds
 
         # No key -> never call external API
         if not self.access_key:
-            if self._quotes_cache is None:
-                self._quotes_cache = {}
-            self._cache_timestamp = now
             return
 
         if self._quotes_cache and not expired:
@@ -108,18 +116,14 @@ class CurrencyService:
         try:
             self._fetch_all_quotes_live()
         except CurrencyServiceError:
-            # If we already have some cache, keep it (best-effort)
+            # If we already have some cache, keep it
             if self._quotes_cache:
                 self._cache_timestamp = now  # prevent tight re-fetch loops
                 return
-            # No cache -> cannot convert; leave empty and let public methods fallback
             self._quotes_cache = {}
             self._cache_timestamp = now
 
     def _rate_source_to(self, currency: str) -> float:
-        """
-        Returns rate: 1 SOURCE = X CURRENCY
-        """
         currency = currency.upper()
         if currency == self._source_currency:
             return 1.0
@@ -130,13 +134,30 @@ class CurrencyService:
             raise UnsupportedCurrencyError(f"Unsupported currency: {currency}")
         return float(rate)
 
+    # ---------- Internal (DEV mock mode) ----------
+
+    def _dev_rate(self, to_currency: str, from_currency: str) -> float:
+        """
+        Returns: 1 unit of from_currency expressed in to_currency using DEV mock table (base EUR).
+        """
+        to_currency = to_currency.upper()
+        from_currency = from_currency.upper()
+
+        rates = self._dev_rates_from_eur or {}
+        if to_currency not in rates or from_currency not in rates:
+            raise UnsupportedCurrencyError(f"Unsupported currency: {to_currency} or {from_currency}")
+
+        # rate(EUR->X) = rates[X]
+        # rate(from->to) = (EUR->to) / (EUR->from)
+        return float(rates[to_currency] / rates[from_currency])
+
     # ---------- Public API ----------
 
     def get_rate(self, to_currency: str, from_currency: str = "EUR") -> float:
         """
         Returns: 1 unit of from_currency expressed in to_currency.
-        Cross-rate via SOURCE currency:
-          rate(from->to) = (SOURCE->to) / (SOURCE->from)
+        - DEV mode (API OFF): uses mock table.
+        - API mode (API ON): cross-rate via SOURCE currency.
         """
         from_currency = from_currency.upper()
         to_currency = to_currency.upper()
@@ -144,10 +165,14 @@ class CurrencyService:
         if from_currency == to_currency:
             return 1.0
 
-        self._ensure_loaded()
+        # DEV mode (no API)
+        if not self.access_key:
+            return self._dev_rate(to_currency=to_currency, from_currency=from_currency)
 
-        # If cache is empty (no key / rate-limited with no cache), fallback 1:1
+        # API mode
+        self._ensure_loaded()
         if not self._quotes_cache:
+            # Best-effort fallback
             return 1.0
 
         s_to_from = self._rate_source_to(from_currency)
@@ -164,18 +189,20 @@ class CurrencyService:
         if from_currency == to_currency:
             return round(amount, 2)
 
-        # No key -> no external calls -> graceful fallback
-        if not self.access_key:
-            return round(amount, 2)
-
         rate = self.get_rate(to_currency=to_currency, from_currency=from_currency)
         return round(amount * rate, 2)
 
     def list_supported_currencies(self):
         """
-        Returns currencies from the current cache.
-        Will trigger one fetch if cache empty/expired (and key exists).
+        Returns currencies that the service can work with.
+        - DEV mode: returns mock table keys.
+        - API mode: returns currencies from current cache (triggers fetch if needed).
         """
+        # DEV mode
+        if not self.access_key:
+            return sorted(set((self._dev_rates_from_eur or {}).keys()))
+
+        # API mode
         self._ensure_loaded()
 
         src = self._source_currency
@@ -186,4 +213,6 @@ class CurrencyService:
             if k.startswith(src) and len(k) == 6:
                 out.add(k[3:])
 
+        # Ensure EUR present for your app baseline
+        out.add("EUR")
         return sorted(out)

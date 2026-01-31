@@ -25,10 +25,10 @@ class OrdersView(BaseView):
         self.tree = ttk.Treeview(self.content, columns=("id", "status", "total"), show="headings", height=12)
         self.tree.heading("id", text="Order ID")
         self.tree.heading("status", text="Status")
-        self.tree.heading("total", text="Total (EUR)")
+        self.tree.heading("total", text="Total")
         self.tree.column("id", width=90, stretch=False, anchor="center")
         self.tree.column("status", width=140, stretch=False)
-        self.tree.column("total", width=140, stretch=False, anchor="e")
+        self.tree.column("total", width=200, stretch=False, anchor="e")
         self.tree.pack(fill="both", expand=True, pady=10)
 
     def on_show(self):
@@ -46,6 +46,9 @@ class OrdersView(BaseView):
             self.set_status("Orders are available for customers")
             return
 
+        currency = self.state.session.currency or "EUR"
+        self.tree.heading("total", text=f"Total ({currency})")
+
         user_id = self.state.session.user_id
         result = store_app_service.ui_list_orders(user_id, limit=50)
         if not result.ok:
@@ -57,8 +60,16 @@ class OrdersView(BaseView):
             self.set_status("No orders yet")
             return
 
-        # DTO from ui_list_orders: order_id, created_at, status, total, currency
+        # service currently returns EUR totals; we convert for display
         for o in orders:
-            self.tree.insert("", "end", values=(o["order_id"], o["status"], f'{o["total"]:.2f}'))
+            base_total = float(o["total"])
+            shown_total = base_total
+            if currency != "EUR":
+                try:
+                    shown_total = store_app_service.currency.convert(base_total, to_currency=currency, from_currency="EUR")
+                except Exception:
+                    shown_total = base_total
+
+            self.tree.insert("", "end", values=(o["order_id"], o["status"], f"{shown_total:.2f} {currency}"))
 
         self.set_status("Orders loaded")

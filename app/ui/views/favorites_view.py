@@ -25,9 +25,9 @@ class FavoritesView(BaseView):
 
         self.tree = ttk.Treeview(self.content, columns=("name", "price"), show="headings", height=14)
         self.tree.heading("name", text="Item")
-        self.tree.heading("price", text="Price (EUR)")
+        self.tree.heading("price", text="Price")
         self.tree.column("name", width=520, stretch=True)
-        self.tree.column("price", width=120, stretch=False, anchor="e")
+        self.tree.column("price", width=160, stretch=False, anchor="e")
         self.tree.pack(fill="both", expand=True, pady=10)
 
         self.tree.bind("<Double-1>", lambda _e: self.open_item())
@@ -55,6 +55,9 @@ class FavoritesView(BaseView):
             self.set_status("Favorites are available for customers")
             return
 
+        currency = self.state.session.currency or "EUR"
+        self.tree.heading("price", text=f"Price ({currency})")
+
         user_id = self.state.session.user_id
         result = store_app_service.ui_list_favorites(user_id)
         if not result.ok:
@@ -67,7 +70,21 @@ class FavoritesView(BaseView):
             return
 
         for it in favs:
-            self.tree.insert("", "end", iid=str(it["id"]), values=(it["name"], f'{it["price"]:.2f}'))
+            # service returns base EUR currently
+            base_price = float(it["price"])
+            shown_price = base_price
+            if currency != "EUR":
+                try:
+                    shown_price = store_app_service.currency.convert(base_price, to_currency=currency, from_currency="EUR")
+                except Exception:
+                    shown_price = base_price
+
+            self.tree.insert(
+                "",
+                "end",
+                iid=str(it["id"]),
+                values=(it["name"], f"{shown_price:.2f} {currency}"),
+            )
 
         self.set_status(f"Loaded {len(favs)} favorites")
 

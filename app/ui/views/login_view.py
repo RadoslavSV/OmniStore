@@ -32,7 +32,11 @@ class LoginView(BaseView):
         btns.pack(anchor="nw", pady=10)
 
         ttk.Button(btns, text="Login", command=self._login).pack(side="left")
-        ttk.Button(btns, text="Go to Register", command=lambda: self.on_navigate("register")).pack(side="left", padx=8)
+        ttk.Button(
+            btns,
+            text="Go to Register",
+            command=lambda: self.on_navigate("register"),
+        ).pack(side="left", padx=8)
 
     def _login(self):
         email = self.email.get().strip()
@@ -48,7 +52,21 @@ class LoginView(BaseView):
             return
 
         user = result.data
-        self.state.set_session(user_id=user.id, username=user.username, email=user.email, role=user.role, currency="EUR")
+
+        # Load user's preferred currency (persisted per CUSTOMER) via UI-safe method.
+        currency = "EUR"
+        if getattr(user, "role", "") == "CUSTOMER":
+            cur_res = store_app_service.ui_get_customer_currency(user.id)
+            if cur_res.ok and cur_res.data:
+                currency = str(cur_res.data).upper()
+
+        self.state.set_session(
+            user_id=user.id,
+            username=user.username,
+            email=user.email,
+            role=user.role,
+            currency=currency,
+        )
         self.on_state_changed()
         self.set_status("Logged in successfully")
         self.on_navigate("catalog")

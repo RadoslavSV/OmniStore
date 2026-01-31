@@ -23,8 +23,6 @@ class CartView(BaseView):
         ttk.Button(top, text="Proceed to Checkout", command=self.checkout).pack(side="left", padx=8)
         ttk.Button(top, text="Remove from Cart", command=self.remove_selected).pack(side="left", padx=8)
 
-        # NOTE:
-        # We store item_id as a hidden column so we can remove selected items reliably.
         self.tree = ttk.Treeview(
             self.content,
             columns=("item_id", "name", "qty", "unit", "subtotal"),
@@ -32,15 +30,12 @@ class CartView(BaseView):
             height=12,
         )
 
-        # Headings
         self.tree.heading("item_id", text="ID")
         self.tree.heading("name", text="Item")
         self.tree.heading("qty", text="Qty")
-        self.tree.heading("unit", text="Unit (EUR)")
-        self.tree.heading("subtotal", text="Subtotal (EUR)")
+        self.tree.heading("unit", text="Unit")
+        self.tree.heading("subtotal", text="Subtotal")
 
-        # Columns
-        # Hide the item_id column (width 0 + no stretch)
         self.tree.column("item_id", width=0, stretch=False)
         self.tree.column("name", width=360, stretch=True)
         self.tree.column("qty", width=60, stretch=False, anchor="center")
@@ -64,18 +59,22 @@ class CartView(BaseView):
             self.total_var.config(text="Total: 0.00 EUR")
             return
 
+        currency = self.state.session.currency
+
+        self.tree.heading("unit", text=f"Unit ({currency})")
+        self.tree.heading("subtotal", text=f"Subtotal ({currency})")
+
         user_id = self.state.session.user_id
-        result = store_app_service.ui_get_cart(user_id, display_currency="EUR")
+        result = store_app_service.ui_get_cart(user_id, display_currency=currency)
         if not result.ok:
             self.set_status(result.error.message)
             return
 
         cart = result.data or {}
         items = cart.get("items", [])
-        total = cart.get("total", {"amount": 0, "currency": "EUR"})
+        total = cart.get("total", {"amount": 0, "currency": currency})
 
         for it in items:
-            # Expecting: item_id, name, quantity, unit_price, subtotal
             self.tree.insert(
                 "",
                 "end",
@@ -120,7 +119,6 @@ class CartView(BaseView):
         if not values:
             return
 
-        # values = (item_id, name, qty, unit, subtotal)
         try:
             item_id = int(values[0])
         except Exception:

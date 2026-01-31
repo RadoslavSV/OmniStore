@@ -28,7 +28,7 @@ class CatalogView(BaseView):
 
         self.tree = ttk.Treeview(self.content, columns=("name", "price"), show="headings", height=14)
         self.tree.heading("name", text="Item")
-        self.tree.heading("price", text="Price (EUR)")
+        self.tree.heading("price", text="Price (EUR)")  # will be updated in refresh()
         self.tree.column("name", width=520, stretch=True)
         self.tree.column("price", width=120, stretch=False, anchor="e")
         self.tree.pack(fill="both", expand=True, pady=10)
@@ -38,15 +38,29 @@ class CatalogView(BaseView):
         self.refresh()
 
     def on_show(self):
-        # optional: keep it fresh
         self.refresh()
+
+    # ---- Helpers ----
+
+    def _current_currency(self) -> str:
+        """
+        Safe currency getter:
+        - if guest (session is None) -> EUR
+        - if logged in -> session.currency (fallback EUR)
+        """
+        s = getattr(self.state, "session", None)
+        cur = getattr(s, "currency", None)
+        return (cur or "EUR").upper()
 
     def refresh(self):
         for i in self.tree.get_children():
             self.tree.delete(i)
         self.items_index.clear()
 
-        result = store_app_service.ui_list_items()
+        currency = self._current_currency()
+        self.tree.heading("price", text=f"Price ({currency})")
+
+        result = store_app_service.ui_list_items(display_currency=currency)
         if not result.ok:
             self.set_status(result.error.message)
             return
@@ -60,7 +74,6 @@ class CatalogView(BaseView):
         for it in items:
             item_id = int(it["id"])
             self.items_index[item_id] = it
-            # use iid = item_id for easy selection
             self.tree.insert("", "end", iid=str(item_id), values=(it["name"], f'{it["price"]:.2f}'))
 
         self.set_status(f"Loaded {len(items)} items")

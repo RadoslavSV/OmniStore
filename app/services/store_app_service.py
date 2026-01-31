@@ -33,6 +33,8 @@ from app.services.order_history_service import OrderHistoryService
 from app.services.favorites_service import FavoritesService
 from app.services.history_service import HistoryService
 
+from app.services.currency_service import CurrencyService
+
 from app.presentation.app_result import AppResult
 from app.presentation.error_mapper import map_exception
 from app.presentation.app_exceptions import AppError
@@ -55,7 +57,9 @@ class StoreAppService:
 
     Notes:
     - Prices in DB are base currency EUR.
-    - Currency API calls are controlled internally by CartService/CurrencyService flags.
+    - CurrencyService is DEV-safe:
+        OMNISTORE_ENABLE_CURRENCY_API=0 -> NO HTTP calls, convert() behaves 1:1
+        OMNISTORE_ENABLE_CURRENCY_API=1 -> real requests (cached by TTL inside CurrencyService)
     """
 
     # Repos
@@ -86,6 +90,9 @@ class StoreAppService:
     favorites: FavoritesService
     history: HistoryService
 
+    # Currency
+    currency: CurrencyService
+
     base_currency: str = "EUR"
 
     # ---------- Factory ----------
@@ -112,6 +119,9 @@ class StoreAppService:
 
         auth = AuthService(user_repo)
         roles = RoleService(admin_repo, customer_repo)
+
+        # CurrencyService: DEV-safe; will not call HTTP unless OMNISTORE_ENABLE_CURRENCY_API=1
+        currency = CurrencyService()
 
         cart = CartService(
             cart_repo=cart_repo,
@@ -156,6 +166,7 @@ class StoreAppService:
             order_history=order_history,
             favorites=favorites,
             history=history,
+            currency=currency,
             base_currency="EUR",
         )
 
@@ -163,7 +174,7 @@ class StoreAppService:
 
     def register_customer(self, username: str, email: str, name: str, password: str, currency: str = "EUR") -> User:
         user = self.auth.register(username=username, email=email, name=name, password=password)
-        self.roles.make_customer(user.id, currency=currency)
+        self.roles.make_customer(user.id, currency=(currency or self.base_currency).upper())
         return self.roles.enrich_user_role(user)
 
     def login(self, email: str, password: str) -> User:
@@ -173,20 +184,70 @@ class StoreAppService:
     def ensure_admin(self, user_id: int) -> None:
         self.roles.make_admin(user_id)
 
+    # ---------- Currency preferences ----------
+
     def set_customer_currency(self, user_id: int, currency: str) -> None:
+        """
+        Persist user's preferred currency.
+        DEV rule: do NOT hard-fail if currency is not in API list (API may be disabled).
+        We'll rely on UI list + later real testing when API is enabled.
+        """
+        currency = (currency or self.base_currency).upper()
         self.customer_repo.set_currency(user_id, currency)
 
     def get_customer_currency(self, user_id: int) -> str:
         return (self.customer_repo.get_currency(user_id) or self.base_currency).upper()
 
+    def list_supported_currencies(self) -> List[str]:
+        """
+        Return a stable baseline list + merge with whatever CurrencyService currently has.
+        (CurrencyService may have only a tiny set in DEV/offline mode.)
+        """
+        baseline = ["EUR", "USD", "GBP", "BGN", "RON", "TRY", "CHF", "JPY", "CAD", "AUD"]
+
+        out = set(c.upper() for c in baseline)
+
+        try:
+            lst = self.currency.list_supported_currencies() or []
+            for c in lst:
+                if c:
+                    out.add(str(c).upper())
+        except Exception:
+            pass
+
+        return sorted(out)
+
     # ---------- Catalog ----------
 
-    def list_items(self) -> List[Dict]:
+    def list_items(self, display_currency: Optional[str] = None) -> List[Dict]:
+        """
+        Returns list suitable for item_list_dto.
+        If display_currency provided: converts price_base -> display_currency.
+        """
         items = self.item_repo.list_all() or []
-        return [
-            {"item_id": it.id, "name": it.name, "price_base": float(it.price), "currency": self.base_currency}
-            for it in items
-        ]
+        target = (display_currency or self.base_currency).upper()
+
+        out: List[Dict] = []
+        for it in items:
+            price_base = float(it.price)
+            price = price_base
+
+            if target != self.base_currency:
+                try:
+                    price = self.currency.convert(price_base, to_currency=target, from_currency=self.base_currency)
+                except Exception:
+                    price = price_base
+
+            out.append(
+                {
+                    "item_id": it.id,
+                    "name": it.name,
+                    "price_base": price_base,
+                    "price": float(price),
+                    "currency": target,
+                }
+            )
+        return out
 
     def get_item_details(self, item_id: int) -> dict:
         """
@@ -194,18 +255,16 @@ class StoreAppService:
         {
           "item": <Item model>,
           "categories": [str, ...],
-          "pictures": [str, ...],          # file paths
-          "main_picture": str | None       # file path
+          "pictures": [str, ...],
+          "main_picture": str | None
         }
         """
         item = self.item_repo.get_by_id(item_id)
         if not item:
             raise AppError("Item not found")
 
-        # Use direct SQL to avoid repo-method-name mismatches
         conn = get_connection()
         try:
-            # Categories (names)
             cur = conn.execute(
                 """
                 SELECT c.Name AS Name
@@ -218,7 +277,6 @@ class StoreAppService:
             )
             categories = [r["Name"] for r in cur.fetchall()]
 
-            # Pictures (paths)
             cur = conn.execute(
                 """
                 SELECT FilePath, IsMain
@@ -229,7 +287,6 @@ class StoreAppService:
                 (int(item_id),),
             )
             pics = cur.fetchall()
-
         finally:
             conn.close()
 
@@ -263,10 +320,6 @@ class StoreAppService:
     # ---------- Checkout / Orders ----------
 
     def proceed_to_checkout(self, customer_user_id: int) -> int:
-        """
-        Proceed to checkout = successful purchase (no payment simulation).
-        Creates order snapshot and empties cart.
-        """
         return self.checkout.checkout(customer_user_id)
 
     def list_orders(self, customer_user_id: int, limit: int = 50) -> List[Dict]:
@@ -290,17 +343,35 @@ class StoreAppService:
     def ui_register_customer(self, username: str, email: str, name: str, password: str, currency: str = "EUR") -> AppResult:
         return self.run(self.register_customer, username, email, name, password, currency)
 
-    def ui_list_items(self) -> AppResult:
-        return self.run(lambda: item_list_dto(self.list_items()))
+    # ---- Currency (UI-safe) ----
+
+    def ui_list_supported_currencies(self) -> AppResult:
+        return self.run(self.list_supported_currencies)
+
+    def ui_get_customer_currency(self, user_id: int) -> AppResult:
+        return self.run(self.get_customer_currency, user_id)
+
+    def ui_set_customer_currency(self, user_id: int, currency: str) -> AppResult:
+        return self.run(self.set_customer_currency, user_id, currency)
+
+    # ---- Catalog (UI-safe) ----
+
+    def ui_list_items(self, display_currency: Optional[str] = None) -> AppResult:
+        return self.run(lambda: item_list_dto(self.list_items(display_currency=display_currency)))
 
     def ui_item_details(self, item_id: int) -> AppResult:
         return self.run(lambda: item_details_dto(self.get_item_details(item_id)))
+
+    # ---- Cart / Orders (UI-safe) ----
 
     def ui_get_cart(self, customer_user_id: int, display_currency=None) -> AppResult:
         return self.run(lambda: cart_dto(self.get_cart(customer_user_id, display_currency)))
 
     def ui_add_to_cart(self, customer_user_id: int, item_id: int, quantity: int = 1) -> AppResult:
         return self.run(self.add_to_cart, customer_user_id, item_id, quantity)
+
+    def ui_remove_from_cart(self, customer_user_id: int, item_id: int) -> AppResult:
+        return self.run(self.remove_from_cart, customer_user_id, item_id)
 
     def ui_checkout(self, customer_user_id: int) -> AppResult:
         return self.run(self.proceed_to_checkout, customer_user_id)
@@ -310,9 +381,6 @@ class StoreAppService:
 
     def ui_order_details(self, customer_user_id: int, order_id: int) -> AppResult:
         return self.run(lambda: order_details_dto(self.get_order_details(customer_user_id, order_id)))
-    
-    def ui_remove_from_cart(self, customer_user_id: int, item_id: int) -> AppResult:
-        return self.run(self.remove_from_cart, customer_user_id, item_id)
 
     # ---------------- Favorites (UI-safe via direct SQL) ----------------
 
