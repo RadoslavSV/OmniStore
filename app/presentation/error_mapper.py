@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import sqlite3
 from typing import Tuple
 
 from app.services.auth_service import (
@@ -73,5 +73,11 @@ def map_exception(exc: Exception) -> Tuple[str, str]:
     if isinstance(exc, CurrencyServiceError):
         return "CURRENCY_ERROR", "Currency service unavailable"
 
+    # ---- Generic / DB / Validation ----
+    if isinstance(exc, ValueError):
+        return "VALIDATION_ERROR", str(exc) or "Invalid input"
+    if isinstance(exc, sqlite3.IntegrityError):
+        return "DB_INTEGRITY", "Database constraint error (duplicate or invalid data)"
+    
     # ---- Fallback ----
     return "UNKNOWN_ERROR", "Unexpected error occurred"

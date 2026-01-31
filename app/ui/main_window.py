@@ -16,6 +16,9 @@ from app.ui.views.favorites_view import FavoritesView
 from app.ui.views.history_view import HistoryView
 from app.ui.views.currency_view import CurrencyView
 
+# NEW (Admin)
+from app.ui.views.manage_items_view import ManageItemsView
+
 
 class MainWindow:
     def __init__(self, root: tk.Tk):
@@ -25,7 +28,7 @@ class MainWindow:
 
         apply_theme(self.root)
 
-        self.state = AppState()  # session state (guest by default)
+        self.state = AppState()
 
         # Layout
         self.root.columnconfigure(0, weight=0)
@@ -63,7 +66,7 @@ class MainWindow:
         self.views: dict[str, ttk.Frame] = {}
         self._create_views()
 
-        # Sidebar navigation buttons (kept so we can show/hide)
+        # Sidebar navigation buttons
         self.nav_buttons: dict[str, ttk.Button] = {}
         self._build_sidebar()
 
@@ -87,51 +90,27 @@ class MainWindow:
             state=self.state,
             on_state_changed=self._refresh_ui_for_state,
         )
-        self.views["catalog"] = CatalogView(
-            self.body,
-            on_navigate=self.show,
-            set_status=self.set_status,
-            state=self.state,
-        )
-        self.views["cart"] = CartView(
-            self.body,
-            on_navigate=self.show,
-            set_status=self.set_status,
-            state=self.state,
-        )
-        self.views["orders"] = OrdersView(
-            self.body,
-            on_navigate=self.show,
-            set_status=self.set_status,
-            state=self.state,
-        )
-        self.views["item_details"] = ItemDetailsView(
-            self.body,
-            on_navigate=self.show,
-            set_status=self.set_status,
-            state=self.state,
-        )
-        self.views["favorites"] = FavoritesView(
-            self.body,
-            on_navigate=self.show,
-            set_status=self.set_status,
-            state=self.state,
-        )
-        self.views["history"] = HistoryView(
-            self.body,
-            on_navigate=self.show,
-            set_status=self.set_status,
-            state=self.state,
-        )
+        self.views["catalog"] = CatalogView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
+        self.views["cart"] = CartView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
+        self.views["orders"] = OrdersView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
+        self.views["item_details"] = ItemDetailsView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
+        self.views["favorites"] = FavoritesView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
+        self.views["history"] = HistoryView(self.body, on_navigate=self.show, set_status=self.set_status, state=self.state)
 
-        # Currency page (full-page)
-        # IMPORTANT: matches CurrencyView signature: on_currency_changed=...
         self.views["currency"] = CurrencyView(
             self.body,
             on_navigate=self.show,
             set_status=self.set_status,
             state=self.state,
             on_currency_changed=self._on_currency_changed,
+        )
+
+        # NEW: Admin Manage Items
+        self.views["manage_items"] = ManageItemsView(
+            self.body,
+            on_navigate=self.show,
+            set_status=self.set_status,
+            state=self.state,
         )
 
         for v in self.views.values():
@@ -154,9 +133,12 @@ class MainWindow:
         self.nav_buttons["history"] = ttk.Button(self.sidebar, text="History", style="Nav.TButton", command=lambda: self.show("history"))
         self.nav_buttons["currency"] = ttk.Button(self.sidebar, text="Currency", style="Nav.TButton", command=lambda: self.show("currency"))
 
-        # Layout
+        # Admin-only
+        self.nav_buttons["manage_items"] = ttk.Button(self.sidebar, text="Manage Items", style="Nav.TButton", command=lambda: self.show("manage_items"))
+
+        # Layout order
         row = 1
-        for key in ["login", "register", "catalog", "cart", "orders", "favorites", "history", "currency"]:
+        for key in ["login", "register", "catalog", "cart", "orders", "favorites", "history", "currency", "manage_items"]:
             self.nav_buttons[key].grid(row=row, column=0, sticky="ew", pady=4)
             row += 1
 
@@ -170,16 +152,13 @@ class MainWindow:
         logged = self.state.is_logged_in
 
         if not logged:
-            # show guest buttons
             self.nav_buttons["login"].grid()
             self.nav_buttons["register"].grid()
-
-            # hide customer-only
-            for k in ["cart", "orders", "favorites", "history", "currency"]:
-                self.nav_buttons[k].grid_remove()
-
-            # logout hidden
             self.logout_btn.grid_remove()
+
+            # hide customer-only + admin-only
+            for k in ["cart", "orders", "favorites", "history", "currency", "manage_items"]:
+                self.nav_buttons[k].grid_remove()
 
             self.ToplevelStatus.set("Not logged in")
             return
@@ -189,16 +168,25 @@ class MainWindow:
         self.nav_buttons["register"].grid_remove()
         self.logout_btn.grid()
 
+        # Everyone logged sees catalog
         if role == "CUSTOMER":
             for k in ["cart", "orders", "favorites", "history", "currency"]:
                 self.nav_buttons[k].grid()
-        else:
-            # ADMIN: hide customer-only
-            for k in ["cart", "orders", "favorites", "history", "currency"]:
-                self.nav_buttons[k].grid_remove()
+            self.nav_buttons["manage_items"].grid_remove()
+
+            s = self.state.session
+            self.ToplevelStatus.set(f"Logged in as {s.username} ({s.role}) | Currency: {s.currency}")
+            return
+
+        # ADMIN
+        for k in ["cart", "orders", "favorites", "history", "currency"]:
+            self.nav_buttons[k].grid_remove()
+        self.nav_buttons["manage_items"].grid()
 
         s = self.state.session
-        self.ToplevelStatus.set(f"Logged in as {s.username} ({s.role}) | Currency: {s.currency}")
+        # currency may be None for admin sessions; show EUR as base label
+        cur = getattr(s, "currency", None) or "EUR"
+        self.ToplevelStatus.set(f"Logged in as {s.username} ({s.role}) | Currency: {cur}")
 
     def logout(self):
         self.state.set_guest()
@@ -209,13 +197,7 @@ class MainWindow:
     # -------- Currency change hook --------
 
     def _on_currency_changed(self):
-        """
-        Called by CurrencyView after user selects a new currency.
-        Refresh views that show prices.
-        """
         self._refresh_ui_for_state()
-
-        # Ask views to refresh (if they support it)
         for key in ["catalog", "cart", "favorites", "history", "orders", "item_details"]:
             v = self.views.get(key)
             if v is not None and hasattr(v, "on_show"):
@@ -231,13 +213,20 @@ class MainWindow:
         if view is None:
             return
 
-        # Access control for customer-only views
+        # Customer-only views
         if view_key in ("cart", "orders", "favorites", "history", "currency") and not self.state.is_logged_in:
             self.set_status("Please login first")
             self.views["login"].tkraise()
             return
 
-        # Admin rules
+        # Admin-only view
+        if view_key == "manage_items":
+            if not self.state.is_logged_in or self.state.role != "ADMIN":
+                self.set_status("Manage Items is available for ADMIN only")
+                self.views["catalog"].tkraise()
+                return
+
+        # Admin restrictions (customer views not allowed)
         if self.state.is_logged_in and self.state.role == "ADMIN":
             if view_key in ("orders", "cart", "favorites", "history", "currency"):
                 self.set_status("This section is available for customers")
@@ -258,6 +247,7 @@ class MainWindow:
 
         if self.state.is_logged_in:
             s = self.state.session
-            self.ToplevelStatus.set(f"{text} | {s.username} ({s.role}) | {s.currency}")
+            cur = getattr(s, "currency", None) or "EUR"
+            self.ToplevelStatus.set(f"{text} | {s.username} ({s.role}) | {cur}")
         else:
             self.ToplevelStatus.set(text)
