@@ -8,7 +8,8 @@ def item_list_dto(items) -> List[Dict]:
         {
             "id": it["item_id"],
             "name": it["name"],
-            "price": it["price_base"],
+            # IMPORTANT: use converted "price" if present; fallback to base
+            "price": it.get("price", it.get("price_base")),
             "currency": it["currency"],
         }
         for it in items
@@ -31,6 +32,7 @@ def cart_dto(cart: Dict) -> Dict:
             for it in cart.get("items", [])
         ],
         "total": {
+            # Keep existing structure (your services return total["total"])
             "amount": cart["total"]["total"],
             "currency": cart["total"]["currency"],
         },
@@ -45,7 +47,8 @@ def order_list_dto(orders: List[Dict]) -> List[Dict]:
             "order_id": o["order_id"],
             "created_at": o["created_at"],
             "status": o["status"],
-            "total": o["total_base"],
+            # IMPORTANT: prefer converted total if present; fallback to base
+            "total": o.get("total", o.get("total_base")),
             "currency": o["currency"],
         }
         for o in orders
@@ -58,7 +61,7 @@ def order_details_dto(details: Dict) -> Dict:
             "order_id": details["order"]["order_id"],
             "created_at": details["order"]["created_at"],
             "status": details["order"]["status"],
-            "total": details["order"]["total_base"],
+            "total": details["order"].get("total", details["order"].get("total_base")),
             "currency": details["order"]["currency"],
         },
         "items": [
@@ -66,13 +69,16 @@ def order_details_dto(details: Dict) -> Dict:
                 "item_id": it["item_id"],
                 "name": it["item_name"],
                 "quantity": it["quantity"],
-                "unit_price": it["unit_price_base"],
-                "subtotal": it["subtotal_base"],
+                "unit_price": it.get("unit_price", it.get("unit_price_base")),
+                "subtotal": it.get("subtotal", it.get("subtotal_base")),
                 "currency": it["currency"],
             }
             for it in details["items"]
         ],
     }
+
+
+# ---------- ITEM DETAILS ----------
 
 def item_details_dto(details: Dict) -> Dict:
     it = details["item"]
@@ -92,4 +98,3 @@ def item_details_dto(details: Dict) -> Dict:
         "pictures": details.get("pictures", []),
         "main_picture": details.get("main_picture"),
     }
-
