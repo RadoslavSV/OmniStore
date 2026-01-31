@@ -9,6 +9,7 @@ from app.ui.service_provider import store_app_service
 
 from app.ui.three_d_launcher import launch_vpython_viewer, Item3DInfo
 
+
 class ItemDetailsView(BaseView):
     def __init__(self, parent, *, on_navigate, set_status, state):
         super().__init__(
@@ -16,7 +17,6 @@ class ItemDetailsView(BaseView):
             on_navigate=on_navigate,
             set_status=set_status,
             title="Item Details",
-            subtitle="Stage 3.x: details + pictures + add to cart.",
         )
         self.state = state
         self.item = None  # DTO dict
@@ -83,7 +83,6 @@ class ItemDetailsView(BaseView):
         ttk.Button(actions, text="Remove Favorite", command=self.remove_favorite).pack(side="left", padx=8)
 
         # ----- Right: image + arrows -----
-        # A small frame for arrows + image
         carousel = ttk.Frame(self.right)
         carousel.pack(anchor="ne")
 
@@ -96,15 +95,19 @@ class ItemDetailsView(BaseView):
         self.btn_next = ttk.Button(carousel, text="▶", width=3, command=self._next_picture)
         self.btn_next.grid(row=0, column=2, padx=(6, 0), sticky="n")
 
-        # caption like "1/3"
         self.pic_counter = ttk.Label(self.right, text="", style="Muted.TLabel")
         self.pic_counter.pack(anchor="ne", pady=(6, 0))
 
-        # Hide arrows by default until we load pictures
         self._update_carousel_controls()
 
     def on_show(self):
         self.load_item()
+
+    def _display_currency(self) -> str:
+        if not self.state.is_logged_in or not getattr(self.state, "session", None):
+            return "EUR"
+        c = getattr(self.state.session, "currency", None) or "EUR"
+        return str(c).upper()
 
     def load_item(self):
         item_id = self.state.selected_item_id
@@ -123,6 +126,21 @@ class ItemDetailsView(BaseView):
         if self.state.is_logged_in and self.state.role == "CUSTOMER":
             store_app_service.ui_record_view(self.state.session.user_id, int(self.item["id"]))
 
+        # ---- Convert price for display currency (Catalog/Details were stuck on EUR) ----
+        try:
+            target = self._display_currency()
+            base_cur = str(self.item.get("currency") or "EUR").upper()
+            base_price = float(self.item.get("price") or 0.0)
+
+            if target and target != base_cur:
+                # Use the same CurrencyService instance through StoreAppService
+                converted = store_app_service.currency.convert(base_price, to_currency=target, from_currency=base_cur)
+                self.item["price"] = float(converted)
+                self.item["currency"] = target
+        except Exception:
+            # If conversion fails, keep original price/currency (safe)
+            pass
+
         # Header + description
         self.header.config(text=f'{self.item["name"]}  (ID: {self.item["id"]})')
         self.desc.config(text=self.item.get("description") or "")
@@ -131,7 +149,7 @@ class ItemDetailsView(BaseView):
         d = self.item["dimensions"]
         self.dim_var.config(text=f'Dimensions (L×W×H): {d["length"]} × {d["width"]} × {d["height"]} cm')
         self.weight_var.config(text=f'Weight: {self.item["weight"]} kg')
-        self.price_var.config(text=f'Price: {self.item["price"]:.2f} {self.item["currency"]}')
+        self.price_var.config(text=f'Price: {float(self.item["price"]):.2f} {self.item["currency"]}')
 
         cats = self.item.get("categories") or []
         self.cat_var.config(text=f"Categories: {', '.join(cats) if cats else '-'}")
@@ -140,7 +158,6 @@ class ItemDetailsView(BaseView):
         self._pictures = list(self.item.get("pictures") or [])
         main = self.item.get("main_picture")
 
-        # choose starting index: main picture if present
         self._pic_index = 0
         if main and self._pictures:
             try:
@@ -167,13 +184,13 @@ class ItemDetailsView(BaseView):
     def _prev_picture(self):
         if not self._pictures:
             return
-        self._pic_index = (self._pic_index - 1) % len(self._pictures)  # cyclic
+        self._pic_index = (self._pic_index - 1) % len(self._pictures)
         self._show_current_picture()
 
     def _next_picture(self):
         if not self._pictures:
             return
-        self._pic_index = (self._pic_index + 1) % len(self._pictures)  # cyclic
+        self._pic_index = (self._pic_index + 1) % len(self._pictures)
         self._show_current_picture()
 
     def _show_current_picture(self):
@@ -188,27 +205,18 @@ class ItemDetailsView(BaseView):
         self._update_carousel_controls()
 
     def _load_image(self, path: str, frame_size=(420, 320), bg_color=(0, 0, 0)):
-        """
-        Loads image into a fixed-size frame (letterbox).
-        - Keeps arrows perfectly aligned.
-        - Adds black bars where needed.
-        """
-        # Clear previous image
         self._tk_image = None
         self.image_label.config(image="", text="")
 
         if not path:
-            # Render an empty black frame (optional) or just "No image"
             frame = Image.new("RGB", frame_size, bg_color)
             self._tk_image = ImageTk.PhotoImage(frame)
             self.image_label.config(image=self._tk_image, text="")
             return
 
-        # Resolve DB relative path -> absolute path based on project root (OmniStore/)
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         abs_path = os.path.normpath(os.path.join(project_root, path))
 
-        # If missing, still show fixed black frame (no layout shifts)
         if not os.path.exists(abs_path):
             frame = Image.new("RGB", frame_size, bg_color)
             self._tk_image = ImageTk.PhotoImage(frame)
@@ -217,29 +225,21 @@ class ItemDetailsView(BaseView):
 
         try:
             img = Image.open(abs_path)
-
-            # Convert to RGB to avoid issues with palette/alpha in some PNGs
-            # (If you want to preserve transparency, we can do RGBA; but black bars are fine with RGB.)
             if img.mode not in ("RGB", "RGBA"):
                 img = img.convert("RGB")
 
-            # Fit inside frame while keeping aspect ratio
             fw, fh = frame_size
             iw, ih = img.size
 
-            # Compute scale
             scale = min(fw / iw, fh / ih)
             new_w = max(1, int(iw * scale))
             new_h = max(1, int(ih * scale))
 
             resized = img.resize((new_w, new_h), Image.LANCZOS)
 
-            # Create background frame and paste centered
             frame = Image.new("RGB", (fw, fh), bg_color)
 
-            # If resized has alpha, paste using alpha as mask
             if resized.mode == "RGBA":
-                # Put RGBA over black -> still looks correct
                 tmp = Image.new("RGBA", (fw, fh), bg_color + (255,))
                 x = (fw - new_w) // 2
                 y = (fh - new_h) // 2
@@ -252,9 +252,7 @@ class ItemDetailsView(BaseView):
 
             self._tk_image = ImageTk.PhotoImage(frame)
             self.image_label.config(image=self._tk_image, text="")
-
-        except Exception as e:
-            # On error, show fixed black frame (no layout shifts)
+        except Exception:
             frame = Image.new("RGB", frame_size, bg_color)
             self._tk_image = ImageTk.PhotoImage(frame)
             self.image_label.config(image=self._tk_image, text="")
@@ -348,5 +346,3 @@ class ItemDetailsView(BaseView):
 
         launch_vpython_viewer(info)
         self.set_status("Opened 3D viewer")
-
-

@@ -40,8 +40,7 @@ class CatalogView(BaseView):
     def on_show(self):
         self.refresh()
 
-    def _get_display_currency(self) -> str:
-        # Guest -> EUR; Logged-in -> session currency
+    def _display_currency(self) -> str:
         if not self.state.is_logged_in or not getattr(self.state, "session", None):
             return "EUR"
         c = getattr(self.state.session, "currency", None) or "EUR"
@@ -52,9 +51,10 @@ class CatalogView(BaseView):
             self.tree.delete(i)
         self.items_index.clear()
 
-        currency = self._get_display_currency()
+        currency = self._display_currency()
         self.tree.heading("price", text=f"Price ({currency})")
 
+        # IMPORTANT: pass display_currency so service returns converted prices
         result = store_app_service.ui_list_items(display_currency=currency)
         if not result.ok:
             self.set_status(result.error.message)
@@ -65,11 +65,10 @@ class CatalogView(BaseView):
             self.set_status("Catalog is empty")
             return
 
-        # DTO: {id, name, price, currency}
         for it in items:
             item_id = int(it["id"])
             self.items_index[item_id] = it
-            self.tree.insert("", "end", iid=str(item_id), values=(it["name"], f'{it["price"]:.2f}'))
+            self.tree.insert("", "end", iid=str(item_id), values=(it["name"], f'{float(it["price"]):.2f}'))
 
         self.set_status(f"Loaded {len(items)} items")
 
