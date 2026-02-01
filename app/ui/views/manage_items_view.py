@@ -10,7 +10,7 @@ from app.ui.service_provider import store_app_service
 
 class ManageItemsView(BaseView):
     """
-    ADMIN view: CRUD Items (minimal + safe).
+    ADMIN view: CRUD Items (safe).
     Uses StoreAppService admin methods (direct SQL).
     """
 
@@ -150,17 +150,33 @@ class ManageItemsView(BaseView):
         # OmniStore/
         return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
+    def _normalize_picture_name(self, p: str) -> str:
+        """
+        Accept:
+          - table_1.png
+          - images/table_1.png
+          - images\\table_1.png
+        Return:
+          - table_1.png
+        """
+        p = (p or "").strip()
+        if not p:
+            return ""
+        p = p.replace("\\", "/")
+        if p.lower().startswith("images/"):
+            p = p.split("/", 1)[1]
+        return p.strip()
+
     def _parse_pictures(self, s: str) -> list[str]:
-        # accept comma/newline/semicolon separated
         raw = (s or "").replace(";", ",").replace("\n", ",")
-        names = [x.strip() for x in raw.split(",") if x.strip()]
-        # keep unique order
-        out = []
+        parts = [x.strip() for x in raw.split(",") if x.strip()]
+        out: list[str] = []
         seen = set()
-        for n in names:
-            if n not in seen:
-                out.append(n)
-                seen.add(n)
+        for x in parts:
+            x = self._normalize_picture_name(x)
+            if x and x not in seen:
+                out.append(x)
+                seen.add(x)
         return out
 
     def _validate_pictures_exist(self, names: list[str]) -> tuple[bool, str]:
@@ -174,7 +190,7 @@ class ManageItemsView(BaseView):
             if not os.path.exists(p):
                 missing.append(n)
         if missing:
-            return False, "Missing image files in images/: " + ", ".join(missing)
+            return False, "Missing image files in /images: " + ", ".join(missing)
         return True, ""
 
     def _open_editor(self, *, title: str, item: dict | None):
@@ -203,7 +219,7 @@ class ManageItemsView(BaseView):
         ent_weight = ttk.Entry(frm, width=18)
         ent_weight.grid(row=3, column=1, sticky="w", pady=4)
 
-        # Dimensions (needed for Item Details / 3D)
+        # Dimensions: your DB uses Height/Width/Depth, but UI keeps (Length/Width/Height)
         ttk.Label(frm, text="Length (cm):").grid(row=4, column=0, sticky="w", pady=4)
         ent_len = ttk.Entry(frm, width=18)
         ent_len.grid(row=4, column=1, sticky="w", pady=4)
@@ -216,11 +232,11 @@ class ManageItemsView(BaseView):
         ent_hei = ttk.Entry(frm, width=18)
         ent_hei.grid(row=6, column=1, sticky="w", pady=4)
 
-        # Pictures (filenames inside images/)
+        # Pictures
         ttk.Label(frm, text="Pictures (filenames):").grid(row=7, column=0, sticky="nw", pady=4)
         txt_pics = tk.Text(frm, width=52, height=3)
         txt_pics.grid(row=7, column=1, sticky="w", pady=4)
-        hint = ttk.Label(frm, text="Example: chair1.jpg, chair2.png", style="Muted.TLabel")
+        hint = ttk.Label(frm, text="Example: chair_1.png, desk_2.png (must exist in /images)", style="Muted.TLabel")
         hint.grid(row=8, column=1, sticky="w", pady=(0, 6))
 
         # Prefill
@@ -235,14 +251,12 @@ class ManageItemsView(BaseView):
             ent_hei.insert(0, f'{float(item.get("height", 0.0)):.2f}')
 
             pics = item.get("pictures") or []
-            # show as comma-separated filenames (strip "images/")
             fnames = []
             for p in pics:
-                p = str(p)
+                p = str(p).replace("\\", "/")
                 if p.lower().startswith("images/"):
                     fnames.append(p.split("/", 1)[1])
                 else:
-                    # if already filename
                     fnames.append(p)
             txt_pics.insert("1.0", ", ".join(fnames))
         else:
@@ -298,8 +312,15 @@ class ManageItemsView(BaseView):
                 messagebox.showerror("Validation", msg)
                 return
 
+            if not self.state.is_logged_in or self.state.role != "ADMIN":
+                messagebox.showerror("Error", "Admin session missing")
+                return
+
+            admin_user_id = int(self.state.session.user_id)
+
             if item is None:
                 res = store_app_service.ui_admin_create_item(
+                    admin_user_id=admin_user_id,
                     name=name,
                     description=desc,
                     price=price,
