@@ -239,6 +239,20 @@ class ManageItemsView(BaseView):
         hint = ttk.Label(frm, text="Example: chair_1.png, desk_2.png (must exist in /images)", style="Muted.TLabel")
         hint.grid(row=8, column=1, sticky="w", pady=(0, 6))
 
+        # Categories (multi-select)
+        ttk.Label(frm, text="Categories:").grid(row=9, column=0, sticky="nw", pady=4)
+        lst_cats = tk.Listbox(frm, width=52, height=6, selectmode="multiple", exportselection=False)
+        lst_cats.grid(row=9, column=1, sticky="w", pady=4)
+
+        # Load all categories
+        res_cats = store_app_service.ui_admin_list_categories()
+        all_cats = res_cats.data if res_cats.ok else []
+        # map index -> category_id
+        cat_ids_by_idx = []
+        for c in all_cats:
+            lst_cats.insert("end", c["name"])
+            cat_ids_by_idx.append(int(c["id"]))
+
         # Prefill
         if item:
             ent_name.insert(0, item.get("name", "") or "")
@@ -259,6 +273,11 @@ class ManageItemsView(BaseView):
                 else:
                     fnames.append(p)
             txt_pics.insert("1.0", ", ".join(fnames))
+
+            selected = set(item.get("category_ids") or [])
+            for idx, cid in enumerate(cat_ids_by_idx):
+                if cid in selected:
+                    lst_cats.selection_set(idx)
         else:
             ent_price.insert(0, "0.00")
             ent_weight.insert(0, "0.00")
@@ -267,7 +286,7 @@ class ManageItemsView(BaseView):
             ent_hei.insert(0, "0.00")
 
         btns = ttk.Frame(frm)
-        btns.grid(row=9, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        btns.grid(row=10, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         def on_save():
             name = ent_name.get().strip()
@@ -318,6 +337,9 @@ class ManageItemsView(BaseView):
 
             admin_user_id = int(self.state.session.user_id)
 
+            sel_idx = list(lst_cats.curselection() or [])
+            selected_cat_ids = [cat_ids_by_idx[i] for i in sel_idx if 0 <= i < len(cat_ids_by_idx)]
+
             if item is None:
                 res = store_app_service.ui_admin_create_item(
                     admin_user_id=admin_user_id,
@@ -329,6 +351,7 @@ class ManageItemsView(BaseView):
                     width=width,
                     height=height,
                     pictures=pic_names,
+                    category_ids=selected_cat_ids,
                 )
             else:
                 res = store_app_service.ui_admin_update_item(
@@ -341,6 +364,7 @@ class ManageItemsView(BaseView):
                     width=width,
                     height=height,
                     pictures=pic_names,
+                    category_ids=selected_cat_ids,
                 )
 
             if not res.ok:

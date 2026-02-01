@@ -350,6 +350,8 @@ class StoreAppService:
             ).fetchall()
             pictures = [p["FilePath"] for p in pics] if pics else []
 
+            cat_ids = self.admin_get_item_categories(int(item_id))
+
             # Map schema -> UI keys:
             # length -> Depth, width -> Width, height -> Height
             return {
@@ -364,6 +366,7 @@ class StoreAppService:
                 "height": float(r["Height"]),
                 "pictures": pictures,
                 "currency": "EUR",
+                "category_ids": cat_ids,
             }
         finally:
             conn.close()
@@ -504,6 +507,65 @@ class StoreAppService:
         finally:
             conn.close()
 
+    # ---------------- ADMIN: Categories for Items ----------------
+
+    def admin_list_categories(self) -> List[Dict]:
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                'SELECT ID, Name FROM "Category" ORDER BY Name ASC'
+            ).fetchall()
+            return [{"id": int(r["ID"]), "name": r["Name"]} for r in rows]
+        finally:
+            conn.close()
+
+    def admin_get_item_categories(self, item_id: int) -> List[int]:
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                'SELECT CategoryID FROM "Item_Category" WHERE ItemID = ? ORDER BY CategoryID ASC',
+                (int(item_id),),
+            ).fetchall()
+            return [int(r["CategoryID"]) for r in rows] if rows else []
+        finally:
+            conn.close()
+
+    def admin_set_item_categories(self, *, item_id: int, category_ids: List[int]) -> None:
+        # Replace strategy: delete all then insert selected
+        clean = []
+        seen = set()
+        for cid in category_ids or []:
+            try:
+                cid_int = int(cid)
+            except Exception:
+                continue
+            if cid_int > 0 and cid_int not in seen:
+                clean.append(cid_int)
+                seen.add(cid_int)
+
+        conn = get_connection()
+        try:
+            # ensure item exists
+            it = conn.execute('SELECT ID FROM "Item" WHERE ID = ?', (int(item_id),)).fetchone()
+            if not it:
+                raise AppError("Item not found")
+
+            conn.execute('DELETE FROM "Item_Category" WHERE ItemID = ?', (int(item_id),))
+
+            for cid in clean:
+                # ensure category exists
+                cat = conn.execute('SELECT ID FROM "Category" WHERE ID = ?', (int(cid),)).fetchone()
+                if not cat:
+                    continue
+                conn.execute(
+                    'INSERT INTO "Item_Category"(ItemID, CategoryID) VALUES (?, ?)',
+                    (int(item_id), int(cid)),
+                )
+
+            conn.commit()
+        finally:
+            conn.close()
+
     # ---------- UI-safe wrappers ----------
 
     def run(self, fn, *args, **kwargs) -> AppResult:
@@ -578,19 +640,25 @@ class StoreAppService:
         width: float,
         height: float,
         pictures: Optional[List[str]] = None,
+        category_ids: Optional[List[int]] = None,
     ) -> AppResult:
-        return self.run(
-            self.admin_create_item,
-            admin_user_id=admin_user_id,
-            name=name,
-            description=description,
-            price=price,
-            weight=weight,
-            length=length,
-            width=width,
-            height=height,
-            pictures=pictures,
-        )
+        def op():
+            item_id = self.admin_create_item(
+                admin_user_id=admin_user_id,
+                name=name,
+                description=description,
+                price=price,
+                weight=weight,
+                length=length,
+                width=width,
+                height=height,
+                pictures=pictures,
+            )
+            if category_ids is not None:
+                self.admin_set_item_categories(item_id=item_id, category_ids=category_ids)
+            return item_id
+
+        return self.run(op)
 
     def ui_admin_update_item(
         self,
@@ -604,22 +672,34 @@ class StoreAppService:
         width: float,
         height: float,
         pictures: Optional[List[str]] = None,
+        category_ids: Optional[List[int]] = None,
     ) -> AppResult:
-        return self.run(
-            self.admin_update_item,
-            item_id=item_id,
-            name=name,
-            description=description,
-            price=price,
-            weight=weight,
-            length=length,
-            width=width,
-            height=height,
-            pictures=pictures,
-        )
+        def op():
+            self.admin_update_item(
+                item_id=item_id,
+                name=name,
+                description=description,
+                price=price,
+                weight=weight,
+                length=length,
+                width=width,
+                height=height,
+                pictures=pictures,
+            )
+            if category_ids is not None:
+                self.admin_set_item_categories(item_id=item_id, category_ids=category_ids)
+            return True
+
+        return self.run(op)
 
     def ui_admin_delete_item(self, item_id: int) -> AppResult:
         return self.run(self.admin_delete_item, item_id)
+    
+    def ui_admin_list_categories(self) -> AppResult:
+        return self.run(self.admin_list_categories)
+
+    def ui_admin_get_item_categories(self, item_id: int) -> AppResult:
+        return self.run(self.admin_get_item_categories, item_id)
 
     # ---------------- Favorites (UI-safe via direct SQL) ----------------
 
