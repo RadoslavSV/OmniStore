@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tkinter as tk
 from tkinter import ttk, messagebox
 
 from app.ui.views.base_view import BaseView
@@ -17,6 +18,11 @@ class CatalogView(BaseView):
         self.state = state
         self.items_index = {}  # item_id -> dto
 
+        # --- Categories filter state ---
+        self._categories: list[dict] = []  # [{"id":..,"name":..}]
+        self._cat_vars: dict[int, tk.BooleanVar] = {}  # cat_id -> var
+        self._cat_menu: tk.Menu | None = None
+
         top = ttk.Frame(self.content)
         top.pack(anchor="nw", fill="x")
 
@@ -25,6 +31,10 @@ class CatalogView(BaseView):
         ttk.Button(top, text="Add to Cart", command=self.add_selected_to_cart).pack(side="left", padx=8)
         ttk.Button(top, text="Go to Cart", command=lambda: self.on_navigate("cart")).pack(side="left", padx=8)
         ttk.Button(top, text="Add to Favorites", command=self.add_selected_to_favorites).pack(side="left", padx=8)
+
+        # Categories dropdown (checkboxes)
+        self.btn_categories = ttk.Menubutton(top, text="Categories ▾")
+        self.btn_categories.pack(side="left", padx=8)
 
         self.tree = ttk.Treeview(self.content, columns=("name", "price"), show="headings", height=14)
         self.tree.heading("name", text="Item")
@@ -35,9 +45,13 @@ class CatalogView(BaseView):
 
         self.tree.bind("<Double-1>", lambda _e: self.open_details())
 
+        # init categories + load items
+        self._load_categories()
         self.refresh()
 
     def on_show(self):
+        # Re-load categories (in case admin changed them) and refresh list
+        self._load_categories()
         self.refresh()
 
     def _display_currency(self) -> str:
@@ -45,6 +59,93 @@ class CatalogView(BaseView):
             return "EUR"
         c = getattr(self.state.session, "currency", None) or "EUR"
         return str(c).upper()
+
+    # ---------------- Categories filter ----------------
+
+    def _load_categories(self):
+        """
+        Loads all categories and rebuilds the checkbox menu.
+        Default: all categories checked.
+        Keeps previous selections when possible.
+        """
+        # Remember previous selection
+        prev_selected = set(self._selected_category_ids())
+
+        res = store_app_service.ui_list_categories()
+        if not res.ok:
+            self.set_status(res.error.message)
+            self._categories = []
+        else:
+            self._categories = res.data or []
+
+        # rebuild vars/menu
+        self._cat_vars.clear()
+
+        menu = tk.Menu(self.btn_categories, tearoff=0)
+
+        def set_all(value: bool):
+            for v in self._cat_vars.values():
+                v.set(value)
+            self._update_categories_button_text()
+            self.refresh()
+
+        # actions
+        menu.add_command(label="Select all", command=lambda: set_all(True))
+        menu.add_command(label="Clear all", command=lambda: set_all(False))
+        menu.add_separator()
+
+        for c in self._categories:
+            cid = int(c["id"])
+            name = str(c["name"])
+
+            var = tk.BooleanVar(value=True)
+            # try restore previous selection (if we had it)
+            if prev_selected:
+                var.set(cid in prev_selected)
+
+            self._cat_vars[cid] = var
+
+            # when toggled -> refresh
+            menu.add_checkbutton(
+                label=name,
+                variable=var,
+                command=self._on_categories_changed,
+            )
+
+        self._cat_menu = menu
+        self.btn_categories["menu"] = menu
+        self._update_categories_button_text()
+
+    def _selected_category_ids(self) -> list[int]:
+        out = []
+        for cid, var in self._cat_vars.items():
+            try:
+                if bool(var.get()):
+                    out.append(int(cid))
+            except Exception:
+                pass
+        return out
+
+    def _on_categories_changed(self):
+        self._update_categories_button_text()
+        self.refresh()
+
+    def _update_categories_button_text(self):
+        total = len(self._cat_vars)
+        selected = len(self._selected_category_ids())
+
+        if total == 0:
+            self.btn_categories.config(text="Categories ▾")
+            return
+
+        if selected == 0:
+            self.btn_categories.config(text="Categories (none)")
+        elif selected == total:
+            self.btn_categories.config(text="Categories (all)")
+        else:
+            self.btn_categories.config(text=f"Categories ({selected}/{total})")
+
+    # ---------------- Catalog list ----------------
 
     def refresh(self):
         for i in self.tree.get_children():
@@ -54,23 +155,43 @@ class CatalogView(BaseView):
         currency = self._display_currency()
         self.tree.heading("price", text=f"Price ({currency})")
 
-        # IMPORTANT: pass display_currency so service returns converted prices
-        result = store_app_service.ui_list_items(display_currency=currency)
+        selected_cat_ids = self._selected_category_ids()
+
+        # If no categories selected -> show nothing (user asked "only checked categories")
+        # You can change this behavior if you prefer "no selection = all".
+        if self._cat_vars and len(selected_cat_ids) == 0:
+            self.set_status("No categories selected")
+            return
+
+        # IMPORTANT:
+        # Use filtered call when we have categories; otherwise default list
+        if self._cat_vars:
+            result = store_app_service.ui_list_items_filtered(display_currency=currency, category_ids=selected_cat_ids)
+        else:
+            result = store_app_service.ui_list_items(display_currency=currency)
+
         if not result.ok:
             self.set_status(result.error.message)
             return
 
         items = result.data or []
         if not items:
-            self.set_status("Catalog is empty")
+            self.set_status("No items for selected categories" if self._cat_vars else "Catalog is empty")
             return
 
         for it in items:
             item_id = int(it["id"])
             self.items_index[item_id] = it
-            self.tree.insert("", "end", iid=str(item_id), values=(it["name"], f'{float(it["price"]):.2f}'))
+            self.tree.insert(
+                "",
+                "end",
+                iid=str(item_id),
+                values=(it["name"], f'{float(it["price"]):.2f}'),
+            )
 
         self.set_status(f"Loaded {len(items)} items")
+
+    # ---------------- Actions ----------------
 
     def _selected_item_id(self):
         sel = self.tree.selection()

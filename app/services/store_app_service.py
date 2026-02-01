@@ -268,6 +268,95 @@ class StoreAppService:
             main_pic = pictures[0]
 
         return {"item": item, "categories": categories, "pictures": pictures, "main_picture": main_pic}
+    
+    def list_categories(self) -> List[Dict]:
+        conn = get_connection()
+        try:
+            cur = conn.execute('SELECT ID, Name FROM "Category" ORDER BY Name ASC')
+            return [{"id": int(r["ID"]), "name": r["Name"]} for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def list_items_filtered(
+        self,
+        *,
+        display_currency: Optional[str] = None,
+        category_ids: Optional[List[int]] = None,
+    ) -> List[Dict]:
+        """
+        Returns same structure as list_items(), but filters items by category_ids (ANY match).
+        If category_ids is empty/None -> returns all items.
+        """
+        target = (display_currency or self.base_currency).upper()
+
+        # clean ids
+        ids: List[int] = []
+        seen = set()
+        for x in category_ids or []:
+            try:
+                xi = int(x)
+            except Exception:
+                continue
+            if xi > 0 and xi not in seen:
+                ids.append(xi)
+                seen.add(xi)
+
+        conn = get_connection()
+        try:
+            if not ids:
+                # fallback to repo (or SQL) - keep your original behavior
+                items = self.item_repo.list_all() or []
+                out: List[Dict] = []
+                for it in items:
+                    price_base = float(it.price)
+                    price = price_base
+                    if target != self.base_currency:
+                        price = self.currency.convert(price_base, to_currency=target, from_currency=self.base_currency)
+
+                    out.append(
+                        {
+                            "item_id": it.id,
+                            "name": it.name,
+                            "price_base": price_base,
+                            "price": float(price),
+                            "currency": target,
+                        }
+                    )
+                return out
+
+            # SQL filtered
+            placeholders = ",".join(["?"] * len(ids))
+            cur = conn.execute(
+                f"""
+                SELECT DISTINCT i.ID as ID, i.Name as Name, i.Price as Price
+                FROM "Item" i
+                JOIN "Item_Category" ic ON ic.ItemID = i.ID
+                WHERE ic.CategoryID IN ({placeholders})
+                ORDER BY i.ID ASC
+                """,
+                tuple(ids),
+            )
+            rows = cur.fetchall()
+
+            out: List[Dict] = []
+            for r in rows:
+                price_base = float(r["Price"])
+                price = price_base
+                if target != self.base_currency:
+                    price = self.currency.convert(price_base, to_currency=target, from_currency=self.base_currency)
+
+                out.append(
+                    {
+                        "item_id": int(r["ID"]),
+                        "name": r["Name"],
+                        "price_base": price_base,
+                        "price": float(price),
+                        "currency": target,
+                    }
+                )
+            return out
+        finally:
+            conn.close()
 
     # ---------- Cart ----------
 
@@ -599,6 +688,17 @@ class StoreAppService:
 
     def ui_item_details(self, item_id: int) -> AppResult:
         return self.run(lambda: item_details_dto(self.get_item_details(item_id)))
+    
+    def ui_list_categories(self) -> AppResult:
+        return self.run(self.list_categories)
+
+    def ui_list_items_filtered(
+        self,
+        *,
+        display_currency: Optional[str] = None,
+        category_ids: Optional[List[int]] = None,
+    ) -> AppResult:
+        return self.run(lambda: item_list_dto(self.list_items_filtered(display_currency=display_currency, category_ids=category_ids)))
 
     # ---- Cart / Orders (UI-safe) ----
 
